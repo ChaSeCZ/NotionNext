@@ -3,7 +3,7 @@
  */
 const CONFIG = {
     PROXIO_WELCOME_COVER_ENABLE: true, //是否显示页面进入的欢迎文字
-    PROXIO_WELCOME_TEXT: '欢迎来到此网站，点击任意位置开火', // 欢迎文字，留空则不启用
+    PROXIO_WELCOME_TEXT: '欢迎来到茶色的作战小屋，点击任意位置开火', // 欢迎文字，留空则不启用
 
     // 英雄区块导航
     PROXIO_HERO_ENABLE: false, // 开启英雄区
@@ -26,7 +26,7 @@ const CONFIG = {
     PROXIO_BLOG_ENABLE: true, // 首页博文区块开关
     PROXIO_BLOG_TITLE: '作品',
     PROXIO_BLOG_COUNT: 12, // 首页博文区块展示前4篇文章
-    PROXIO_BLOG_TEXT_1: '步入我的人生',
+    PROXIO_BLOG_TEXT_1: '茶色的作战小屋',
 
     // 区块默认内容显示文章的summary文本，但也支持用自定义图片或logo德国替换掉占位显示内容
     PROXIO_BLOG_PLACEHOLDER_IMG_URL_1: '', // 填写要替换成的图片，支持图床或直接上传到项目中，示例  /images/feature-1.webp
