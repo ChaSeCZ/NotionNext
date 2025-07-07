@@ -207,20 +207,20 @@ const CONFIG = {
             menus: [
                 { title: 'Github', href: 'https://github.com/tangly1024/NotionNext' },
                 {
-                    title: '开发帮助',
-                    href: 'https://docs.tangly1024.com/article/how-to-develop-with-notion-next'
+                    title: 'XXOO',
+                    href: 'https://'
                 },
                 {
-                    title: '功能反馈',
-                    href: 'https://github.com/tangly1024/NotionNext/issues/new/choose'
+                    title: 'OOXX',
+                    href: 'https://'
                 },
                 {
-                    title: '技术讨论',
-                    href: 'https://github.com/tangly1024/NotionNext/discussions'
+                    title: 'OXOX',
+                    href: 'https://'
                 },
                 {
                     title: '关于作者',
-                    href: 'https:www.tawneycz.com'
+                    href: 'https://www.tawneycz.com/article/f9b265b6-354e-41c4-8cf6-76c5988833e3'
                 }
             ]
         }],
