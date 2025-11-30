@@ -23,7 +23,7 @@ const CONFIG = {
 
   // 文章区块
 PROXIO_BLOG_ENABLE : true , // 首页博文区块开关
-PROXIO_BLOG_TITLE : '我的文章分区' , // 建议改成您希望的标题，例如：文章分类
+PROXIO_BLOG_TITLE : '内容分区' , // 建议改成您希望的标题，例如：文章分类
 PROXIO_BLOG_COUNT : 4 , // 保持为4
 PROXIO_BLOG_TEXT_1 : '知行合一' , // 第一个分区名称
 PROXIO_BLOG_PLACEHOLDER_IMG_URL_1 : '/images/category-tech.webp' , // 第一个分区配图URL
