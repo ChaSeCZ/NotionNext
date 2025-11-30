@@ -95,15 +95,29 @@ const LayoutBase = props => {
 const LayoutIndex = props => {
     const count = siteConfig('PROXIO_BLOG_COUNT', 4, CONFIG)
     const { locale } = useGlobal()
-    const posts = props?.allNavPages ? props.allNavPages.slice(0, count) : []
-    return (
+    const posts = props?.allNavPages ? props.allNavPages.slice(0, count) : [] // 保持获取文章列表，但我们稍后会覆盖其链接和标题
+
+    // *** 新增代码块：注入自定义链接和标题 ***
+    // 从 config.js 中获取自定义配置，并覆盖文章的链接和标题
+    const customPosts = posts.map((post, index) => {
+        const customLink = siteConfig(`PROXIO_BLOG_LINK_${index + 1}`, post.href, CONFIG)
+        const customTitle = siteConfig(`PROXIO_BLOG_TEXT_${index + 1}`, post.title, CONFIG)
+        return {
+            ...post,
+            href: customLink,  // 使用自定义链接替换文章链接
+            title: customTitle // 使用自定义标题替换文章标题
+        }
+    })
+    // *** 新增代码块结束 ***
+    
+    return (<>
         <>
             {/* 英雄区 */}
             {siteConfig('PROXIO_HERO_ENABLE', true, CONFIG) && <Hero {...props} />}
             {/* 博文列表 */}
             {siteConfig('PROXIO_BLOG_ENABLE', true, CONFIG) && (
                 <>
-                    <Blog posts={posts} />
+                    <Blog posts={customPosts} />
                     {/* 更多文章按钮 */}
                     <div className='container mx-auto flex justify-end mb-4'>
                         <SmartLink className='text-lg underline' href={'/archive'}>
