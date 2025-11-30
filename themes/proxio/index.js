@@ -359,9 +359,9 @@ const LayoutPostList = props => {
                                         <span className='mb-2 block text-lg font-semibold text-primary'>
                                             {siteConfig('PROXIO_BLOG_TITLE')}
                                         </span>
-                                        <h2 className='mb-4 text-3xl font-bold text-dark dark:text-white sm:text-4xl md:text-[40px] md:leading-[1.2]'>
+                                       // <h2 className='mb-4 text-3xl font-bold text-dark dark:text-white sm:text-4xl md:text-[40px] md:leading-[1.2]'>
                                             {siteConfig('PROXIO_BLOG_TEXT_1')}
-                                        </h2>
+                                        </h2>//
 
                                     </>
                                 )}
@@ -397,7 +397,7 @@ const LayoutPostList = props => {
                                                 </SmartLink>
                                             </h3>
                                             <p className='max-w-[370px] text-base text-body-color dark:text-dark-6'>
-                                                {item.summary}
+                                               // {item.summary}
                                             </p>
                                         </div>
                                     </div>
