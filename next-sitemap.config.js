@@ -8,6 +8,7 @@ module.exports = {
   changefreq: 'daily',
   priority: 0.7,
   generateRobotsTxt: true,
+  outDir: './public',
   sitemapSize: 7000
   // ...other options
   // https://github.com/iamvishnusankar/next-sitemap#configuration-options
