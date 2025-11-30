@@ -111,7 +111,6 @@ const LayoutIndex = props => {
     // *** 新增代码块结束 ***
     
     return (<>
-        <>
             {/* 英雄区 */}
             {siteConfig('PROXIO_HERO_ENABLE', true, CONFIG) && <Hero {...props} />}
             {/* 博文列表 */}
