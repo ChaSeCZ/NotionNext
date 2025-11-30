@@ -65,7 +65,7 @@ const CONFIG = {
   // 首页生涯区块
   PROXIO_CAREER_ENABLE: true, // 区块开关
   PROXIO_CAREER_TITLE: '经历',
-  PROXIO_CAREER_TEXT: '以下是我的人生经历',
+  PROXIO_CAREER_TEXT: '以下是我的过去',
 
   // 生涯内容卡牌 ，title是标题 ，bio是备注，text是详情
   PROXIO_CAREERS: [
@@ -178,13 +178,13 @@ const CONFIG = {
   // 关于作者区块
   PROXIO_ABOUT_ENABLE: true, // 关于作者区块区块开关
   PROXIO_ABOUT_TITLE: '关于朕',
-  PROXIO_ABOUT_TEXT_1: '我是秦始皇转世',
+  PROXIO_ABOUT_TEXT_1: '我是秦始皇',
   PROXIO_ABOUT_TEXT_2:
     '悠悠岁月少年狂，五味杂陈冠笄苦。凡事摧眉折腰事事忌惮，只为心中之人上下安好。只可惜这世间不如意事十之有九，与人说者无有二三。若是这人间重走一遭，定要\n醉里江南醒时雪，月散乘风夜不归。执剑但去莫负问，踏马横江斩不平。',
   PROXIO_ABOUT_PHOTO_URL: '',
   PROXIO_ABOUT_KEY_1: '目标寿命',
   PROXIO_ABOUT_VAL_1: '1000年+',
-  PROXIO_ABOUT_KEY_2: '目标领土',
+  PROXIO_ABOUT_KEY_2: '目标疆域',
   PROXIO_ABOUT_VAL_2: '银河系',
   PROXIO_ABOUT_KEY_3: '御下百姓',
   PROXIO_ABOUT_VAL_3: '50000+',
@@ -239,7 +239,7 @@ const CONFIG = {
         },
         {
           title: '关于作者',
-          href: 'https://blog.tangly1024.com/about'
+          href: ''
         }
       ]
     }
