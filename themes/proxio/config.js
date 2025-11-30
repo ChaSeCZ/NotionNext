@@ -194,7 +194,7 @@ PROXIO_BLOG_LINK_4 : '/category/生活记录' , // 填写您的第四个分类�
   PROXIO_ABOUT_TEXT_1: '我是秦始皇',
   PROXIO_ABOUT_TEXT_2:
     '悠悠岁月少年狂，五味杂陈冠笄苦。凡事摧眉折腰事事忌惮，只为心中之人上下安好。只可惜这世间不如意事十之有九，与人说者无有二三。若是这人间重走一遭，定要\n醉里江南醒时雪，月散乘风夜不归。执剑但去莫负问，踏马横江斩不平。',
-  PROXIO_ABOUT_PHOTO_URL: '',
+  PROXIO_ABOUT_PHOTO_URL: '/images/IMG_3756.jpeg',
   PROXIO_ABOUT_KEY_1: '目标寿命',
   PROXIO_ABOUT_VAL_1: '1000年+',
   PROXIO_ABOUT_KEY_2: '目标疆域',
