@@ -339,23 +339,12 @@ const LayoutPostList = props => {
     const { posts, category, tag } = props
     const slotTitle = category || tag
 
-    return (
+   return (
         <>
-            {/* <!-- ====== Blog Section Start --> */}
+            {/* */}
             <section className='bg-white pb-10 pt-20 dark:bg-dark lg:pb-20 lg:pt-[120px]'>
                 <div className='container mx-auto'>
-                    {/* 区块标题文字 */}
-                    <div className='-mx-4 flex flex-wrap justify-center'>
-                        <div className='w-full px-4'>
-                            <div className='mx-auto mb-[60px] max-w-[485px] text-center'>
-                                {slotTitle && (
 
-                                )}
-
-
-                            </div>
-                        </div>
-                    </div>
                     {/* 博客列表 此处优先展示4篇文章 */}
                     <div className='-mx-4 flex flex-wrap'>
                         {posts?.map((item, index) => {
