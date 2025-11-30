@@ -349,22 +349,10 @@ const LayoutPostList = props => {
                         <div className='w-full px-4'>
                             <div className='mx-auto mb-[60px] max-w-[485px] text-center'>
                                 {slotTitle && (
-                                    <h2 className='mb-4 text-3xl font-bold text-dark dark:text-white sm:text-4xl md:text-[40px] md:leading-[1.2]'>
-                                        {slotTitle}
-                                    </h2>
+
                                 )}
 
-                                {!slotTitle && (
-                                    <>
-                                        <span className='mb-2 block text-lg font-semibold text-primary'>
-                                            {siteConfig('PROXIO_BLOG_TITLE')}
-                                        </span>
-                                       // <h2 className='mb-4 text-3xl font-bold text-dark dark:text-white sm:text-4xl md:text-[40px] md:leading-[1.2]'>
-                                            {siteConfig('PROXIO_BLOG_TEXT_1')}
-                                        </h2>//
 
-                                    </>
-                                )}
                             </div>
                         </div>
                     </div>
