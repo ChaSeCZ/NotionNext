@@ -31,9 +31,15 @@ PROXIO_BLOG_TEXT_2 : '分类二：生活随笔' , // 第二个分区名称
 PROXIO_BLOG_PLACEHOLDER_IMG_URL_2 : '/images/category-life.webp' , // 第二个分区配图URL
 PROXIO_BLOG_TEXT_3 : '分类三：阅读心得' , // 第三个分区名称
 PROXIO_BLOG_PLACEHOLDER_IMG_URL_3 : '/images/category-book.webp' , // 第三个分区配图URL
-PROXIO_BLOG_TEXT_4 : '分类四：故事分享' , // 第四个分区名称
+PROXIO_BLOG_TEXT_4 : '分类四：生活记录' , // 第四个分区名称
 PROXIO_BLOG_PLACEHOLDER_IMG_URL_4 : '/images/category-project.webp' , // 第四个分区配图URL
 
+  // *** 为分类区块添加的自定义链接变量 (请确保在 index.js 中引用) ***
+PROXIO_BLOG_LINK_1 : '/category/知行合一' , // 填写您的第一个分类链接
+PROXIO_BLOG_LINK_2 : '/category/生活随笔' , // 填写您的第二个分类链接
+PROXIO_BLOG_LINK_3 : '/category/阅读心得' , // 填写您的第三个分类链接
+PROXIO_BLOG_LINK_4 : '/category/生活记录' , // 填写您的第四个分类链接
+  
   // 区块默认内容显示文章的summary文本，但也支持用自定义图片或logo德国替换掉占位显示内容
   PROXIO_BLOG_PLACEHOLDER_IMG_URL_1: '', // 填写要替换成的图片，支持图床或直接上传到项目中，示例  /images/feature-1.webp
   PROXIO_BLOG_PLACEHOLDER_IMG_URL_2: '',
