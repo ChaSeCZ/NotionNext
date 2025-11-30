@@ -22,10 +22,17 @@ const CONFIG = {
   PROXIO_HERO_BANNER_IFRAME_URL: '', // hero背景区内嵌背景网页 ，可以配置一个网页地址，例如动画网页https://my.spline.design/untitled-b0c6e886227646c34afc82cdc6de4ca2/
 
   // 文章区块
-  PROXIO_BLOG_ENABLE: true, // 首页博文区块开关
-  PROXIO_BLOG_TITLE: '过往',
-  PROXIO_BLOG_COUNT: 4, // 首页博文区块展示前4篇文章
-  PROXIO_BLOG_TEXT_1: '近期感悟',
+PROXIO_BLOG_ENABLE : true , // 首页博文区块开关
+PROXIO_BLOG_TITLE : '我的文章分区' , // 建议改成您希望的标题，例如：文章分类
+PROXIO_BLOG_COUNT : 4 , // 保持为4
+PROXIO_BLOG_TEXT_1 : '分类一：知行合一' , // 第一个分区名称
+PROXIO_BLOG_PLACEHOLDER_IMG_URL_1 : '/images/category-tech.webp' , // 第一个分区配图URL
+PROXIO_BLOG_TEXT_2 : '分类二：生活随笔' , // 第二个分区名称
+PROXIO_BLOG_PLACEHOLDER_IMG_URL_2 : '/images/category-life.webp' , // 第二个分区配图URL
+PROXIO_BLOG_TEXT_3 : '分类三：阅读心得' , // 第三个分区名称
+PROXIO_BLOG_PLACEHOLDER_IMG_URL_3 : '/images/category-book.webp' , // 第三个分区配图URL
+PROXIO_BLOG_TEXT_4 : '分类四：故事分享' , // 第四个分区名称
+PROXIO_BLOG_PLACEHOLDER_IMG_URL_4 : '/images/category-project.webp' , // 第四个分区配图URL
 
   // 区块默认内容显示文章的summary文本，但也支持用自定义图片或logo德国替换掉占位显示内容
   PROXIO_BLOG_PLACEHOLDER_IMG_URL_1: '', // 填写要替换成的图片，支持图床或直接上传到项目中，示例  /images/feature-1.webp
@@ -65,7 +72,7 @@ const CONFIG = {
   // 首页生涯区块
   PROXIO_CAREER_ENABLE: true, // 区块开关
   PROXIO_CAREER_TITLE: '经历',
-  PROXIO_CAREER_TEXT: '以下是我的过去',
+  PROXIO_CAREER_TEXT: '我的过去',
 
   // 生涯内容卡牌 ，title是标题 ，bio是备注，text是详情
   PROXIO_CAREERS: [
