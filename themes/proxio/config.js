@@ -65,24 +65,24 @@ const CONFIG = {
   // 首页生涯区块
   PROXIO_CAREER_ENABLE: true, // 区块开关
   PROXIO_CAREER_TITLE: '经历',
-  PROXIO_CAREER_TEXT: '以下是我的人生经历,
+  PROXIO_CAREER_TEXT: '以下是我的人生经历',
 
   // 生涯内容卡牌 ，title是标题 ，bio是备注，text是详情
   PROXIO_CAREERS: [
     {
       title: '参军入伍',
       bio: '2016-2018',
-      text: '等待更新'
+      text: '等待更新',
     },
     {
       title: '大学生涯',
       bio: '2018-2022',
-      text: '等待制作'
+      text: '等待制作',
     },
     {
       title: '狠狠赚钱',
       bio: '2022-Now',
-      text: '我是秦始皇，给我转帐100万'
+      text: '我是秦始皇，给我转帐100万',
     }
   ],
 
