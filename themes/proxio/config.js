@@ -3,10 +3,10 @@
  */
 const CONFIG = {
   PROXIO_WELCOME_COVER_ENABLE: true, //是否显示页面进入的欢迎文字
-  PROXIO_WELCOME_TEXT: '欢迎来到此网站，点击任意位置进入', // 欢迎文字，留空则不启用
+  PROXIO_WELCOME_TEXT: '欢迎来到茶色的作战指挥室', // 欢迎文字，留空则不启用
 
   // 英雄区块导航
-  PROXIO_HERO_ENABLE: true, // 开启英雄区
+  PROXIO_HERO_ENABLE: false, // 开启英雄区
   PROXIO_HERO_TITLE_1: '开源且免费的基于 Notion 笔记的网站构建工具', // 英雄区文字
   PROXIO_HERO_TITLE_2: '通过笔记无感知地建站、成倍放大您的价值', // 英雄区文字
   // 英雄区两个按钮，如果TEXT留空则隐藏按钮
@@ -23,9 +23,9 @@ const CONFIG = {
 
   // 文章区块
   PROXIO_BLOG_ENABLE: true, // 首页博文区块开关
-  PROXIO_BLOG_TITLE: '作品',
+  PROXIO_BLOG_TITLE: '过往',
   PROXIO_BLOG_COUNT: 4, // 首页博文区块展示前4篇文章
-  PROXIO_BLOG_TEXT_1: '我的最新动态',
+  PROXIO_BLOG_TEXT_1: '近期感悟',
 
   // 区块默认内容显示文章的summary文本，但也支持用自定义图片或logo德国替换掉占位显示内容
   PROXIO_BLOG_PLACEHOLDER_IMG_URL_1: '', // 填写要替换成的图片，支持图床或直接上传到项目中，示例  /images/feature-1.webp
@@ -33,10 +33,10 @@ const CONFIG = {
   PROXIO_BLOG_PLACEHOLDER_IMG_URL_3: '',
   PROXIO_BLOG_PLACEHOLDER_IMG_URL_4: '',
 
-  PROXIO_ANNOUNCEMENT_ENABLE: true, //公告文字区块
+  PROXIO_ANNOUNCEMENT_ENABLE: false, //公告文字区块
 
   // 特性区块
-  PROXIO_FEATURE_ENABLE: true, // 特性区块开关
+  PROXIO_FEATURE_ENABLE: false, // 特性区块开关
   PROXIO_FEATURE_TITLE: '为什么选我',
   PROXIO_FEATURE_TEXT_1: '我能让您的项目焕发光彩',
   PROXIO_FEATURE_TEXT_2: '丰富的案例经验，专业的技术服务，优质的沟通效率',
@@ -64,30 +64,30 @@ const CONFIG = {
 
   // 首页生涯区块
   PROXIO_CAREER_ENABLE: true, // 区块开关
-  PROXIO_CAREER_TITLE: '生涯',
-  PROXIO_CAREER_TEXT: '以下是我的职业生涯',
+  PROXIO_CAREER_TITLE: '经历',
+  PROXIO_CAREER_TEXT: '以下是我的人生经历,
 
   // 生涯内容卡牌 ，title是标题 ，bio是备注，text是详情
   PROXIO_CAREERS: [
     {
-      title: 'Freelance Architect',
-      bio: '2016-2020',
-      text: 'As a freelance architect, I worked on a range of residential and commercial projects, balancing form and function. I collaborated with clients and contractors to transform concepts into reality, ensuring each design was both aesthetically pleasing and structurally sound.'
+      title: '参军入伍',
+      bio: '2016-2018',
+      text: '等待更新'
     },
     {
-      title: 'Product Designer at Spotify',
-      bio: '2020-2022',
-      text: 'At Spotify, I helped shape innovative features for millions of users globally. My focus was on creating seamless music discovery experiences, enhancing user interfaces, and optimizing cross-platform navigation, which led to an improved product flow and increased user satisfaction.'
+      title: '大学生涯',
+      bio: '2018-2022',
+      text: '等待制作'
     },
     {
-      title: 'Freelance Product Designer',
+      title: '狠狠赚钱',
       bio: '2022-Now',
-      text: 'Now I design user-centric products that align with client visions. As a freelance product designer, I collaborate with startups and established companies, crafting solutions that elevate user experiences and increase engagement across both digital and physical interfaces.'
+      text: '我是秦始皇，给我转帐100万'
     }
   ],
 
   // 首页用户测评区块
-  PROXIO_TESTIMONIALS_ENABLE: true, // 测评区块开关
+  PROXIO_TESTIMONIALS_ENABLE: false, // 测评区块开关
   PROXIO_TESTIMONIALS_TITLE: '用户反馈',
   PROXIO_TESTIMONIALS_TEXT_1: '我们的用户怎么说',
   PROXIO_TESTIMONIALS_TEXT_2:
@@ -152,7 +152,7 @@ const CONFIG = {
   ],
 
   //   FAQ 常见问题模块
-  PROXIO_FAQ_ENABLE: true, // 常见问题模块开关
+  PROXIO_FAQ_ENABLE: false, // 常见问题模块开关
   PROXIO_FAQ_TITLE: '常见问题解答',
   PROXIO_FAQ_TEXT_1: '有任何问题吗？请看这里',
   PROXIO_FAQ_TEXT_2: '我们收集了常见的用户疑问',
@@ -177,33 +177,34 @@ const CONFIG = {
 
   // 关于作者区块
   PROXIO_ABOUT_ENABLE: true, // 关于作者区块区块开关
-  PROXIO_ABOUT_TITLE: '关于作者',
-  PROXIO_ABOUT_TEXT_1: 'I am an Architect Turned Into a Product Designer',
+  PROXIO_ABOUT_TITLE: '关于朕',
+  PROXIO_ABOUT_TEXT_1: '我是秦始皇转世',
   PROXIO_ABOUT_TEXT_2:
-    'With a background in architecture, I now apply my expertise to product design, blending aesthetics, functionality, and innovation. My goal is to create modern, user-focused designs that bring your vision to life.',
-  PROXIO_ABOUT_PHOTO_URL: '/avatar.png',
-  PROXIO_ABOUT_KEY_1: '经验年限',
-  PROXIO_ABOUT_VAL_1: '10年+',
-  PROXIO_ABOUT_KEY_2: '客户',
-  PROXIO_ABOUT_VAL_2: '1000+',
-  PROXIO_ABOUT_KEY_3: '交付项目',
-  PROXIO_ABOUT_VAL_3: '5000+',
+    '悠悠岁月少年狂，五味杂陈冠笄苦。凡事摧眉折腰事事忌惮，只为心中之人上下安好。只可惜这世间不如意事十之有九，与人说者无有二三。若是这人间重走一遭，定要
+    醉里江南醒时雪，月散乘风夜不归。执剑但去莫负问，踏马横江斩不平。',
+  PROXIO_ABOUT_PHOTO_URL: 'https://www.notion.so/Article-Template-2bbf7825d86280718d9aee328714a139?v=2f76e52084f34bc1a2e65e3025bfb665&source=copy_link',
+  PROXIO_ABOUT_KEY_1: '目标寿命',
+  PROXIO_ABOUT_VAL_1: '1000年+',
+  PROXIO_ABOUT_KEY_2: '目标领土',
+  PROXIO_ABOUT_VAL_2: '银河系',
+  PROXIO_ABOUT_KEY_3: '御下百姓',
+  PROXIO_ABOUT_VAL_3: '50000+',
   PROXIO_ABOUT_KEY_4: '累积创作时长（小时）',
   PROXIO_ABOUT_VAL_4: '10000+',
 
   PROXIO_ABOUT_BUTTON_URL: '/about',
-  PROXIO_ABOUT_BUTTON_TEXT: '关于我',
+  PROXIO_ABOUT_BUTTON_TEXT: '',
 
   // 横向滚动文字
   PROXIO_BRANDS_ENABLE: true, // 滚动文字
   PROXIO_BRANDS: [
-    'Web Design',
-    'Logo Design',
-    'Mobile App Design',
-    'Product Design'
+    '醉里江南醒时雪',
+    '月散乘风夜不归',
+    '执剑但去莫负问',
+    '踏马横江斩不平'
   ],
 
-  PROXIO_FOOTER_SLOGAN: '我们通过技术为品牌和公司创造数字体验。',
+  PROXIO_FOOTER_SLOGAN: '茶色の小屋：探索技术的诗意与哲学。',
 
   // 页脚三列菜单组
   // 页脚菜单
@@ -262,7 +263,7 @@ const CONFIG = {
   PROXIO_404_BACK: '回到主页',
 
   // 页面底部的行动呼吁模块
-  PROXIO_CTA_ENABLE: true,
+  PROXIO_CTA_ENABLE: false,
   PROXIO_CTA_TITLE: '与我建立联系',
   PROXIO_CTA_TITLE_2: '让我们立刻启动您的项目',
   PROXIO_CTA_DESCRIPTION:
@@ -272,7 +273,7 @@ const CONFIG = {
   PROXIO_CTA_BUTTON_TEXT: '联系我',
 
   PROXIO_POST_REDIRECT_ENABLE: true, // 默認開啟重定向
-  PROXIO_POST_REDIRECT_URL: 'https://blog.tangly1024.com', // 重定向域名
+  PROXIO_POST_REDIRECT_URL: 'https://www.tawneycz.com', // 重定向域名
   PROXIO_NEWSLETTER: process.env.NEXT_PUBLIC_THEME_PROXIO_NEWSLETTER || false // 是否开启邮件订阅 请先配置mailchimp功能 https://docs.tangly1024.com/article/notion-next-mailchimp
 }
 export default CONFIG
