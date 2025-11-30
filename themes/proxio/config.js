@@ -26,13 +26,13 @@ PROXIO_BLOG_ENABLE : true , // 首页博文区块开关
 PROXIO_BLOG_TITLE : '内容分区' , // 建议改成您希望的标题，例如：文章分类
 PROXIO_BLOG_COUNT : 4 , // 保持为4
 PROXIO_BLOG_TEXT_1 : '知行合一' , // 第一个分区名称
-PROXIO_BLOG_PLACEHOLDER_IMG_URL_1 : '/images/category-tech.webp' , // 第一个分区配图URL
+PROXIO_BLOG_PLACEHOLDER_IMG_URL_1 : '' , // 第一个分区配图URL
 PROXIO_BLOG_TEXT_2 : '生活随笔' , // 第二个分区名称
-PROXIO_BLOG_PLACEHOLDER_IMG_URL_2 : '/images/category-life.webp' , // 第二个分区配图URL
+PROXIO_BLOG_PLACEHOLDER_IMG_URL_2 : '' , // 第二个分区配图URL
 PROXIO_BLOG_TEXT_3 : '阅读心得' , // 第三个分区名称
-PROXIO_BLOG_PLACEHOLDER_IMG_URL_3 : '/images/category-book.webp' , // 第三个分区配图URL
+PROXIO_BLOG_PLACEHOLDER_IMG_URL_3 : '' , // 第三个分区配图URL
 PROXIO_BLOG_TEXT_4 : '生活记录' , // 第四个分区名称
-PROXIO_BLOG_PLACEHOLDER_IMG_URL_4 : '/images/category-project.webp' , // 第四个分区配图URL
+PROXIO_BLOG_PLACEHOLDER_IMG_URL_4 : '' , // 第四个分区配图URL
 
   // *** 为分类区块添加的自定义链接变量 (请确保在 index.js 中引用) ***
 PROXIO_BLOG_LINK_1 : '/category/知行合一' , // 填写您的第一个分类链接
