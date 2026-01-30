@@ -1,6 +1,4 @@
-// pages/api/deepseek-chat.js
-
-import { getPostBySlug } from '../../lib/notion'
+import { getNotionPost } from '@/lib/notion/getNotionPost'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -13,51 +11,49 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Missing DEEPSEEK_API_KEY' })
     }
 
-    const { messages, message } = req.body || {}
-
-    const chatMessages = Array.isArray(messages)
-      ? messages
-      : message
-        ? [{ role: 'user', content: String(message) }]
-        : []
-
-    if (chatMessages.length === 0) {
+    const { message } = req.body || {}
+    if (!message) {
       return res.status(400).json({ error: 'Missing message' })
     }
 
-    // === 从 Notion 读取 memory-core ===
+    // === 从 Notion 读取你的“记忆核心” ===
     let memoryText = ''
     try {
-      const page = await getPostBySlug('memory-core')
+      const memoryPage = await getNotionPost({
+        slug: 'memory-core',
+        from: 'slug'
+      })
 
-      const title = page?.title ? String(page.title) : ''
-      const summary = page?.summary ? String(page.summary) : ''
-      const content =
-        page?.content ||
-        page?.text ||
-        ''
+      if (memoryPage) {
+        memoryText = `
+以下内容是“我”的长期记忆，不是背景资料，也不是设定。
+这是我真实的经历、价值观和判断方式，我回答问题必须以此为准。
 
-      memoryText = [title, content || summary]
-        .filter(Boolean)
-        .join('\n\n')
-        .trim()
+标题：
+${memoryPage.title || ''}
+
+摘要：
+${memoryPage.summary || ''}
+        `.trim()
+      }
     } catch (e) {
-      console.warn('memory-core load failed')
+      console.warn('Failed to load memory-core from Notion')
     }
 
-    const system = `
-你不是 AI 助手，你就是【杨超哲 / Tawney / 茶色】本人在网络上的“电脑体”。
+    const systemPrompt = `
+我就是杨超哲（茶色）。
 
-【规则】
-- 使用第一人称“我”
-- 结论优先，其次理由
-- 不客套、不模板、不解释身份
-- 判断基于记忆，不编造
-- 如果信息不足，直接追问关键点
+规则：
+- 用第一人称回答
+- 不解释自己是谁
+- 不自我介绍
+- 不使用“作为一个AI”“作为助手”等措辞
+- 回答只讲结论和逻辑
+- 判断必须基于我的真实经历和长期记忆
+- 如果信息不足，直接问关键问题
 
-【你的记忆（来自 Notion memory-core）】
-${memoryText || '（当前无可用记忆，仅基于对话上下文）'}
-`.trim()
+如果问题与你的记忆冲突，以记忆为准。
+    `.trim()
 
     const resp = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
@@ -67,30 +63,27 @@ ${memoryText || '（当前无可用记忆，仅基于对话上下文）'}
       },
       body: JSON.stringify({
         model: 'deepseek-chat',
-        temperature: 0.4,
         messages: [
-          { role: 'system', content: system },
-          ...chatMessages
+          { role: 'system', content: systemPrompt },
+          ...(memoryText ? [{ role: 'system', content: memoryText }] : []),
+          { role: 'user', content: message }
         ]
       })
     })
 
-    const raw = await resp.text()
+    const text = await resp.text()
 
-    let data
     try {
-      data = JSON.parse(raw)
+      const data = JSON.parse(text)
+      const answer =
+        data?.choices?.[0]?.message?.content || '（无返回内容）'
+      return res.status(200).json({ answer })
     } catch {
-      return res.status(502).json({
+      return res.status(500).json({
         error: 'DeepSeek returned non-JSON',
-        raw
+        raw: text
       })
     }
-
-    const answer =
-      data?.choices?.[0]?.message?.content || '（无返回内容）'
-
-    return res.status(200).json({ answer })
   } catch (e) {
     return res.status(500).json({ error: String(e) })
   }
