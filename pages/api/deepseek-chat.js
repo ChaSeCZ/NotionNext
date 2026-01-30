@@ -1,4 +1,4 @@
-import { getPostBySlug } from '@/lib/notion'
+import { getPostBySlug } from '../../lib/notion'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
       console.warn('memory-core not loaded')
     }
 
-    // ===== 系统人格设定 =====
+    // ===== 人格系统 Prompt =====
     const systemPrompt = `
 你是“茶色”的数字化人格助理。
 
@@ -43,7 +43,7 @@ export default async function handler(req, res) {
 如果用户问题与记忆冲突，以记忆为准。
 `.trim()
 
-    // ===== 请求 DeepSeek =====
+    // ===== 调用 DeepSeek =====
     const resp = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
