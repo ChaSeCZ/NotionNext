@@ -1,4 +1,4 @@
-import { getAllPosts } from '@/lib/notion'
+import { getAllPosts } from '../../lib/notion'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
