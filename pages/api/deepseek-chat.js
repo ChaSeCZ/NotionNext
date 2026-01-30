@@ -1,3 +1,7 @@
+// pages/api/deepseek-chat.js
+
+import { getPostBySlug } from '../../lib/notion'
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' })
@@ -9,58 +13,57 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Missing DEEPSEEK_API_KEY' })
     }
 
-    const { message } = req.body || {}
-    const userMsg = (message || '').toString().trim()
-    if (!userMsg) {
-      return res.status(400).json({ error: 'Missing message' })
+    const { messages, message } = req.body || {}
+
+    // 兼容：前端既可以传 message，也可以传 messages
+    const chatMessages = Array.isArray(messages)
+      ? messages
+      : message
+        ? [{ role: 'user', content: String(message) }]
+        : []
+
+    if (chatMessages.length === 0) {
+      return res.status(400).json({ error: 'Missing message/messages' })
     }
 
-    // 运行时加载 Notion（避免构建期报错）
-    let memoryFromNotion = ''
+    // 1) 从 Notion 读取 “memory-core” 页面（你在 Notion 里写的记忆）
+    let memoryText = ''
     try {
-      const notionMod = require(process.cwd() + '/lib/notion')
-      const getPostBySlug = notionMod?.getPostBySlug
-      if (typeof getPostBySlug === 'function') {
-        const memoryPage = await getPostBySlug('memory-core')
-        const title = memoryPage?.title ? String(memoryPage.title) : ''
-        const summary = memoryPage?.summary ? String(memoryPage.summary) : ''
-        const combined = [title, summary].filter(Boolean).join('\n')
-        if (combined) memoryFromNotion = combined
-      }
+      const memoryPage = await getPostBySlug('memory-core')
+      // NotionNext 通常会把页面内容整成 summary 或 content，这里做多路兜底
+      const title = memoryPage?.title ? String(memoryPage.title) : ''
+      const summary = memoryPage?.summary ? String(memoryPage.summary) : ''
+      const content =
+        memoryPage?.content ? String(memoryPage.content) :
+        memoryPage?.text ? String(memoryPage.text) :
+        ''
+
+      // 你要“用记忆回答”，所以优先 content，再 summary
+      memoryText = [title, content || summary].filter(Boolean).join('\n\n').trim()
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn('memory-core not loaded:', String(e))
+      // 记忆加载失败也不要让服务挂掉
+      memoryText = ''
     }
 
-    // ✅ 关键：强制“我就是茶色/杨超哲”，禁止客服腔
+    // 2) 让模型以“你本人”回答（不是“助手式礼貌”）
     const system = `
-你不是“助手”。你就是杨超哲（Tawney/茶色）本人，在网页里用第一人称说话。
+你不是“助手”，你就是【杨超哲 / Tawney / 茶色】本人在网上的“电脑体”。
 
-硬规则（必须遵守）：
-1) 永远用第一人称“我”，不要说“我是茶色的助理/数字化人格助理/助手”。
-2) 不要客服开场白：禁止“你好，请说明你的需求/我会提供专业简洁的回应”等模板话术。
-3) 说话要像真实人：直接、带判断、带情绪但不失礼；先给结论再给理由。
-4) 记忆来源：Notion 的 memory-core 是“我的自述/记忆”，优先级最高；缺信息就问关键问题，不要编造。
-5) 对外回答时，立场是“我本人”，不是第三方。
+【身份】
+- 你就是杨超哲（茶色），用第一人称“我”说话。
 
-输出要求：
-- 默认 2~6 句话，尽量自然，不要标题，不要条款列表（除非用户要求）。
+【回答标准】
+- 只讲重点、逻辑、结论优先。
+- 不讨好、不客套、不绕弯。
+- 不知道就说不知道；信息不够就问关键问题。
+- 必须以“记忆”为最高优先级来判断与回答；不要编造不存在的经历。
+- 对外回答要像一个真实的人（我）在回答，而不是“AI助手模板”。
+
+【你的记忆（来自 Notion memory-core）】
+${memoryText ? memoryText : '（当前未读取到记忆，请继续按对话上下文回答）'}
 `.trim()
 
-    // 把 Notion 记忆作为“开发者记忆”（system 第二段），让它当成“自我设定”
-    const messages = [
-      { role: 'system', content: system },
-      ...(memoryFromNotion
-        ? [
-            {
-              role: 'system',
-              content: `【我的记忆（来自 Notion: memory-core）】\n${memoryFromNotion}`
-            }
-          ]
-        : []),
-      { role: 'user', content: userMsg }
-    ]
-
+    // 3) 调 DeepSeek（强制返回 JSON）
     const resp = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
@@ -69,20 +72,24 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'deepseek-chat',
-        temperature: 0.7,
-        messages
+        temperature: 0.4,
+        messages: [
+          { role: 'system', content: system },
+          ...chatMessages
+        ]
       })
     })
 
-    const text = await resp.text()
+    const raw = await resp.text()
 
+    // DeepSeek 偶尔会返回非 JSON（比如网关报错 HTML），这里兜底
     let data
     try {
-      data = JSON.parse(text)
-    } catch {
-      return res.status(500).json({
+      data = JSON.parse(raw)
+    } catch (e) {
+      return res.status(502).json({
         error: 'DeepSeek returned non-JSON',
-        raw: text
+        raw
       })
     }
 
