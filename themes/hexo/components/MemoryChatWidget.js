@@ -10,15 +10,32 @@ export default function MemoryChatWidget() {
     if (!message.trim()) return
     setLoading(true)
     setAnswer('')
+
+    const memoryText = `
+【身份】
+- 我是杨超哲（Tawney / 茶色）。
+- 我讨厌废话，回答只讲重点和逻辑。
+
+【沟通规则】
+- 先给结论，再给理由。
+- 如果信息不足，先问关键问题，不要乱猜。
+- 语气直接，不讨好，不绕弯。
+
+【目标】
+- 尽可能了解我（但不编造）。
+- 作为我的“电脑体”对外回答问题，保持专业、简洁、有判断。
+    `.trim()
+
     try {
       const res = await fetch('/api/deepseek-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
-          memory: '' // 先留空，后面你再接 Notion “记忆核心”
+          memory: memoryText
         })
       })
+
       const data = await res.json()
       setAnswer(data?.answer || JSON.stringify(data))
     } catch (e) {
