@@ -1,207 +1,300 @@
-// themes/hexo/components/MemoryChatWidget.js
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 export default function MemoryChatWidget() {
   const [open, setOpen] = useState(false)
-  const [input, setInput] = useState('')
+  const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // ✅ 连续上下文：保存整段对话
-  const [msgs, setMsgs] = useState([
-    { role: 'assistant', content: '我在。直接说你的问题。' }
-  ])
+  // chat: [{role:'user'|'assistant', content:''}]
+  const [chat, setChat] = useState([])
+  const chatEndRef = useRef(null)
 
-  // ✅ 可拖拽：保存位置
-  const [pos, setPos] = useState({ right: 18, bottom: 64 })
-  const dragRef = useRef({ dragging: false, startX: 0, startY: 0, startRight: 18, startBottom: 64 })
+  // ====== 拖动相关 ======
+  const [pos, setPos] = useState({ right: 18, bottom: 64 }) // 右下角偏移
+  const dragRef = useRef({
+    dragging: false,
+    startX: 0,
+    startY: 0,
+    startRight: 18,
+    startBottom: 64
+  })
 
-  async function send() {
-    const text = input.trim()
-    if (!text || loading) return
+  const windowSize = useRef({ w: 0, h: 0 })
+  useEffect(() => {
+    const update = () => {
+      windowSize.current = { w: window.innerWidth, h: window.innerHeight }
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
 
-    const nextMsgs = [...msgs, { role: 'user', content: text }]
-    setMsgs(nextMsgs)
-    setInput('')
+  function onDragStart(e) {
+    // 只允许鼠标左键或触摸
+    const isMouse = e.type === 'mousedown'
+    if (isMouse && e.button !== 0) return
+
+    const clientX = isMouse ? e.clientX : e.touches?.[0]?.clientX
+    const clientY = isMouse ? e.clientY : e.touches?.[0]?.clientY
+
+    dragRef.current.dragging = true
+    dragRef.current.startX = clientX
+    dragRef.current.startY = clientY
+    dragRef.current.startRight = pos.right
+    dragRef.current.startBottom = pos.bottom
+  }
+
+  function onDragMove(e) {
+    if (!dragRef.current.dragging) return
+    const isMouse = e.type === 'mousemove'
+    const clientX = isMouse ? e.clientX : e.touches?.[0]?.clientX
+    const clientY = isMouse ? e.clientY : e.touches?.[0]?.clientY
+
+    const dx = clientX - dragRef.current.startX
+    const dy = clientY - dragRef.current.startY
+
+    // right/bottom 是反方向：鼠标往右，right 应该变小
+    let newRight = dragRef.current.startRight - dx
+    let newBottom = dragRef.current.startBottom - dy
+
+    // 简单限制，避免拖出屏幕
+    const pad = 8
+    const maxRight = windowSize.current.w - pad
+    const maxBottom = windowSize.current.h - pad
+    if (newRight < pad) newRight = pad
+    if (newBottom < pad) newBottom = pad
+    if (newRight > maxRight) newRight = maxRight
+    if (newBottom > maxBottom) newBottom = maxBottom
+
+    setPos({ right: newRight, bottom: newBottom })
+  }
+
+  function onDragEnd() {
+    dragRef.current.dragging = false
+  }
+
+  useEffect(() => {
+    window.addEventListener('mousemove', onDragMove)
+    window.addEventListener('mouseup', onDragEnd)
+    window.addEventListener('touchmove', onDragMove, { passive: true })
+    window.addEventListener('touchend', onDragEnd)
+    return () => {
+      window.removeEventListener('mousemove', onDragMove)
+      window.removeEventListener('mouseup', onDragEnd)
+      window.removeEventListener('touchmove', onDragMove)
+      window.removeEventListener('touchend', onDragEnd)
+    }
+  }, [pos])
+
+  // ====== 发送 ======
+  async function ask() {
+    const userMsg = message.trim()
+    if (!userMsg || loading) return
+
+    const nextChat = [...chat, { role: 'user', content: userMsg }]
+    setChat(nextChat)
+    setMessage('')
     setLoading(true)
 
     try {
       const res = await fetch('/api/deepseek-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: nextMsgs })
+        body: JSON.stringify({
+          message: userMsg,
+          // ✅ 连续对话上下文一起发给 API（你要的）
+          history: nextChat.slice(-12) // 只带最近 12 轮，防 token 爆
+        })
       })
 
-      const data = await res.json()
-      const answer = data?.answer || data?.error || '（无返回）'
-      setMsgs(m => [...m, { role: 'assistant', content: answer }])
+      const raw = await res.text()
+
+      let data
+      try {
+        data = JSON.parse(raw)
+      } catch (e) {
+        throw new Error(`API返回不是JSON：\n${raw.slice(0, 400)}`)
+      }
+
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`)
+
+      const answer = data?.answer || '（无返回内容）'
+      setChat(prev => [...prev, { role: 'assistant', content: answer }])
     } catch (e) {
-      setMsgs(m => [...m, { role: 'assistant', content: String(e) }])
+      setChat(prev => [
+        ...prev,
+        { role: 'assistant', content: `【错误】${String(e)}` }
+      ])
     } finally {
       setLoading(false)
     }
   }
 
-  // esc 关闭
+  // esc 关闭 + Ctrl/Cmd+Enter 发送
   useEffect(() => {
     const onKey = e => {
       if (e.key === 'Escape') setOpen(false)
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') send()
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') ask()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
 
-  // 拖拽逻辑
-  function onMouseDown(e) {
-    dragRef.current.dragging = true
-    dragRef.current.startX = e.clientX
-    dragRef.current.startY = e.clientY
-    dragRef.current.startRight = pos.right
-    dragRef.current.startBottom = pos.bottom
-  }
-
+  // 自动滚到底
   useEffect(() => {
-    function onMove(e) {
-      if (!dragRef.current.dragging) return
-      const dx = e.clientX - dragRef.current.startX
-      const dy = e.clientY - dragRef.current.startY
+    if (!open) return
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chat, open])
 
-      // right/bottom 反向
-      const newRight = Math.max(8, dragRef.current.startRight - dx)
-      const newBottom = Math.max(8, dragRef.current.startBottom - dy)
-      setPos({ right: newRight, bottom: newBottom })
-    }
-    function onUp() {
-      dragRef.current.dragging = false
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [pos])
+  // ====== UI样式 ======
+  const styles = useMemo(
+    () => ({
+      btn: {
+        position: 'fixed',
+        right: 18,
+        bottom: 18,
+        zIndex: 9999,
+        borderRadius: 999,
+        padding: '10px 14px',
+        background: 'rgba(0,0,0,0.6)',
+        color: '#fff',
+        border: '1px solid rgba(255,255,255,0.25)',
+        cursor: 'pointer'
+      },
+      panel: {
+        position: 'fixed',
+        right: pos.right,
+        bottom: pos.bottom,
+        width: 420,
+        maxWidth: 'calc(100vw - 36px)',
+        zIndex: 9999,
+        background: '#fff',
+        borderRadius: 14,
+        boxShadow: '0 18px 50px rgba(0,0,0,0.22)',
+        border: '1px solid rgba(0,0,0,0.08)',
+        overflow: 'hidden'
+      },
+      header: {
+        padding: '12px 14px',
+        fontWeight: 800,
+        borderBottom: '1px solid rgba(0,0,0,0.08)',
+        cursor: 'move',
+        userSelect: 'none',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between'
+      },
+      chatBox: {
+        background: '#f9fafb',
+        border: '1px solid rgba(0,0,0,0.08)',
+        borderRadius: 12,
+        padding: 12,
+        height: 260,
+        overflow: 'auto'
+      },
+      bubbleRow: role => ({
+        display: 'flex',
+        justifyContent: role === 'user' ? 'flex-end' : 'flex-start',
+        marginBottom: 10
+      }),
+      bubble: role => ({
+        maxWidth: '82%',
+        padding: '10px 12px',
+        borderRadius: 14,
+        whiteSpace: 'pre-wrap',
+        lineHeight: 1.6,
+        background: role === 'user' ? '#111827' : '#fff',
+        color: role === 'user' ? '#fff' : '#111',
+        border: role === 'user' ? 'none' : '1px solid rgba(0,0,0,0.12)',
+        boxShadow:
+          role === 'user'
+            ? '0 8px 18px rgba(17,24,39,0.18)'
+            : '0 8px 18px rgba(0,0,0,0.06)'
+      }),
+      input: {
+        width: '100%',
+        height: 90,
+        resize: 'none',
+        borderRadius: 12,
+        border: '1px solid rgba(0,0,0,0.12)',
+        padding: 12,
+        outline: 'none',
+        marginTop: 10
+      },
+      btnRow: { display: 'flex', gap: 8, marginTop: 10 },
+      sendBtn: {
+        flex: 1,
+        borderRadius: 12,
+        padding: '12px 12px',
+        background: '#111827',
+        color: '#fff',
+        border: 'none',
+        cursor: loading ? 'not-allowed' : 'pointer',
+        opacity: loading ? 0.7 : 1
+      },
+      clearBtn: {
+        borderRadius: 12,
+        padding: '12px 12px',
+        background: '#fff',
+        border: '1px solid rgba(0,0,0,0.15)',
+        cursor: 'pointer'
+      }
+    }),
+    [pos.right, pos.bottom, loading]
+  )
 
   return (
     <>
-      {/* 右下角按钮 */}
-      <button
-        onClick={() => setOpen(v => !v)}
-        style={{
-          position: 'fixed',
-          right: 18,
-          bottom: 18,
-          zIndex: 9999,
-          borderRadius: 999,
-          padding: '10px 14px',
-          background: 'rgba(0,0,0,0.65)',
-          color: '#fff',
-          border: '1px solid rgba(255,255,255,0.25)',
-          cursor: 'pointer'
-        }}
-      >
+      <button onClick={() => setOpen(v => !v)} style={styles.btn}>
         {open ? '关闭' : '问问茶色'}
       </button>
 
       {open && (
-        <div
-          style={{
-            position: 'fixed',
-            right: pos.right,
-            bottom: pos.bottom,
-            width: 380,
-            maxWidth: 'calc(100vw - 24px)',
-            zIndex: 9999,
-            background: '#fff',
-            borderRadius: 14,
-            boxShadow: '0 18px 50px rgba(0,0,0,0.22)',
-            border: '1px solid rgba(0,0,0,0.08)',
-            overflow: 'hidden'
-          }}
-        >
-          {/* 顶部拖拽栏 */}
+        <div style={styles.panel}>
+          {/* 拖动区域：标题栏 */}
           <div
-            onMouseDown={onMouseDown}
-            style={{
-              padding: '12px 14px',
-              fontWeight: 800,
-              borderBottom: '1px solid rgba(0,0,0,0.08)',
-              cursor: 'move',
-              userSelect: 'none'
-            }}
-            title="按住这里拖动"
+            style={styles.header}
+            onMouseDown={onDragStart}
+            onTouchStart={onDragStart}
           >
-            我正在狠狠回答
+            <div>我正在狠狠回答</div>
+            <div style={{ fontSize: 12, color: '#6b7280' }}>拖动这里</div>
           </div>
 
-          {/* 对话区 */}
           <div style={{ padding: 12 }}>
-            <div
-              style={{
-                background: '#f9fafb',
-                border: '1px solid rgba(0,0,0,0.08)',
-                borderRadius: 10,
-                padding: 10,
-                maxHeight: 240,
-                overflow: 'auto',
-                fontSize: 13,
-                lineHeight: 1.6
-              }}
-            >
-              {msgs.map((m, idx) => (
-                <div key={idx} style={{ marginBottom: 10 }}>
-                  <div style={{ fontWeight: 700, opacity: 0.7 }}>
-                    {m.role === 'user' ? '你' : '我'}
-                  </div>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
+            <div style={styles.chatBox}>
+              {chat.length === 0 ? (
+                <div style={{ color: '#6b7280', fontSize: 13 }}>
+                  直接问。支持 Ctrl/Cmd + Enter 发送。
                 </div>
-              ))}
-              {loading && <div style={{ opacity: 0.6 }}>…思考中</div>}
+              ) : (
+                chat.map((m, idx) => (
+                  <div key={idx} style={styles.bubbleRow(m.role)}>
+                    <div style={styles.bubble(m.role)}>{m.content}</div>
+                  </div>
+                ))
+              )}
+              <div ref={chatEndRef} />
             </div>
 
             <textarea
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              placeholder="输入问题…（Ctrl/⌘ + Enter 发送）"
-              style={{
-                width: '100%',
-                height: 84,
-                resize: 'none',
-                borderRadius: 10,
-                border: '1px solid rgba(0,0,0,0.12)',
-                padding: 10,
-                outline: 'none',
-                marginTop: 10
-              }}
+              value={message}
+              onChange={e => setMessage(e.target.value)}
+              placeholder="输入问题…（Ctrl/Cmd + Enter 发送）"
+              style={styles.input}
             />
 
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <button
-                onClick={send}
-                disabled={loading}
-                style={{
-                  flex: 1,
-                  borderRadius: 10,
-                  padding: '10px 12px',
-                  background: '#111827',
-                  color: '#fff',
-                  border: 'none',
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                  opacity: loading ? 0.7 : 1
-                }}
-              >
+            <div style={styles.btnRow}>
+              <button onClick={ask} disabled={loading} style={styles.sendBtn}>
                 {loading ? '思考中…' : '发送'}
               </button>
 
               <button
-                onClick={() => setMsgs([{ role: 'assistant', content: '我在。直接说你的问题。' }])}
-                style={{
-                  borderRadius: 10,
-                  padding: '10px 12px',
-                  background: '#fff',
-                  border: '1px solid rgba(0,0,0,0.15)',
-                  cursor: 'pointer'
+                onClick={() => {
+                  setMessage('')
+                  setChat([])
                 }}
+                style={styles.clearBtn}
               >
                 清空
               </button>
