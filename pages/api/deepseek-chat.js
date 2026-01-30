@@ -1,6 +1,6 @@
 // pages/api/deepseek-chat.js
 
-import { getPostBySlug } from '../../lib/notion.js'
+import { getPostBySlug } from '../../lib/notion'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
