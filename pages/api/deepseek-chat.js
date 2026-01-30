@@ -22,24 +22,35 @@ export default async function handler(req, res) {
 ${memory || ''}
 `.trim()
 
-  const resp = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: message }
-      ],
-      temperature: 0.6
-    })
+const resp = await fetch('https://api.deepseek.com/chat/completions', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${apiKey}`
+  },
+  body: JSON.stringify({
+    model: 'deepseek-chat',
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: message }
+    ]
   })
+})
 
-  const data = await resp.json()
+const text = await resp.text()
+
+// 关键：先兜底打印原始返回
+console.log('DeepSeek raw response:', text)
+
+try {
+  const data = JSON.parse(text)
   res.status(200).json({
     answer: data?.choices?.[0]?.message?.content || ''
+  })
+} catch (e) {
+  // 明确把“不是 JSON 的内容”返回给前端
+  res.status(500).json({
+    error: 'DeepSeek returned non-JSON response',
+    raw: text
   })
 }
