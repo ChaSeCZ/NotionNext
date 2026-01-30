@@ -6,7 +6,7 @@ import { loadExternalResource } from '@/lib/utils'
 import { useEffect, useState } from 'react'
 import CONFIG from '../config'
 import NavButtonGroup from './NavButtonGroup'
-import MemoryChatWidget from '@/components/MemoryChatWidget'
+import MemoryChatWidget from './MemoryChatWidget'
 
 let wrapperTop = 0
 
