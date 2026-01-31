@@ -1,128 +1,161 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export default function MemoryChatWidget() {
+  const [mounted, setMounted] = useState(false)
   const [open, setOpen] = useState(false)
-  const [message, setMessage] = useState('')
+  const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // chat: [{role:'user'|'assistant', content:''}]
-  const [chat, setChat] = useState([])
-  const chatEndRef = useRef(null)
+  // 对话上下文（连续）
+  const [messages, setMessages] = useState([]) // [{role:'user'|'assistant', content:string}]
 
-  // ====== 拖动相关 ======
-  const [pos, setPos] = useState({ right: 18, bottom: 64 }) // 右下角偏移
-  const dragRef = useRef({
-    dragging: false,
-    startX: 0,
-    startY: 0,
-    startRight: 18,
-    startBottom: 64
-  })
-
-  const windowSize = useRef({ w: 0, h: 0 })
-  useEffect(() => {
-    const update = () => {
-      windowSize.current = { w: window.innerWidth, h: window.innerHeight }
-    }
-    update()
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
+  // 拖动位置（持久化）
+  const defaultPos = useMemo(() => {
+    try {
+      const s = localStorage.getItem('memory_chat_pos')
+      if (s) return JSON.parse(s)
+    } catch {}
+    return { x: null, y: null } // null 表示用右下角默认定位
   }, [])
 
-  function onDragStart(e) {
-    // 只允许鼠标左键或触摸
-    const isMouse = e.type === 'mousedown'
-    if (isMouse && e.button !== 0) return
+  const [pos, setPos] = useState(defaultPos)
 
-    const clientX = isMouse ? e.clientX : e.touches?.[0]?.clientX
-    const clientY = isMouse ? e.clientY : e.touches?.[0]?.clientY
-
-    dragRef.current.dragging = true
-    dragRef.current.startX = clientX
-    dragRef.current.startY = clientY
-    dragRef.current.startRight = pos.right
-    dragRef.current.startBottom = pos.bottom
-  }
-
-  function onDragMove(e) {
-    if (!dragRef.current.dragging) return
-    const isMouse = e.type === 'mousemove'
-    const clientX = isMouse ? e.clientX : e.touches?.[0]?.clientX
-    const clientY = isMouse ? e.clientY : e.touches?.[0]?.clientY
-
-    const dx = clientX - dragRef.current.startX
-    const dy = clientY - dragRef.current.startY
-
-    // right/bottom 是反方向：鼠标往右，right 应该变小
-    let newRight = dragRef.current.startRight - dx
-    let newBottom = dragRef.current.startBottom - dy
-
-    // 简单限制，避免拖出屏幕
-    const pad = 8
-    const maxRight = windowSize.current.w - pad
-    const maxBottom = windowSize.current.h - pad
-    if (newRight < pad) newRight = pad
-    if (newBottom < pad) newBottom = pad
-    if (newRight > maxRight) newRight = maxRight
-    if (newBottom > maxBottom) newBottom = maxBottom
-
-    setPos({ right: newRight, bottom: newBottom })
-  }
-
-  function onDragEnd() {
-    dragRef.current.dragging = false
-  }
+  const draggingRef = useRef(false)
+  const dragOffsetRef = useRef({ dx: 0, dy: 0 })
+  const panelRef = useRef(null)
 
   useEffect(() => {
-    window.addEventListener('mousemove', onDragMove)
-    window.addEventListener('mouseup', onDragEnd)
-    window.addEventListener('touchmove', onDragMove, { passive: true })
-    window.addEventListener('touchend', onDragEnd)
-    return () => {
-      window.removeEventListener('mousemove', onDragMove)
-      window.removeEventListener('mouseup', onDragEnd)
-      window.removeEventListener('touchmove', onDragMove)
-      window.removeEventListener('touchend', onDragEnd)
+    setMounted(true)
+  }, [])
+
+  // esc 关闭
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === 'Escape') setOpen(false)
     }
-  }, [pos])
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
-  // ====== 发送 ======
-  async function ask() {
-    const userMsg = message.trim()
-    if (!userMsg || loading) return
+  // 保存位置
+  useEffect(() => {
+    if (!mounted) return
+    try {
+      localStorage.setItem('memory_chat_pos', JSON.stringify(pos))
+    } catch {}
+  }, [pos, mounted])
 
-    const nextChat = [...chat, { role: 'user', content: userMsg }]
-    setChat(nextChat)
-    setMessage('')
+  // 拖动逻辑（Pointer Events）
+  function onPointerDown(e) {
+    // 只允许从标题栏拖动
+    draggingRef.current = true
+    const panel = panelRef.current
+    if (!panel) return
+    const rect = panel.getBoundingClientRect()
+
+    // 计算鼠标点到面板左上角的偏移
+    dragOffsetRef.current = {
+      dx: e.clientX - rect.left,
+      dy: e.clientY - rect.top
+    }
+
+    // 捕获指针
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {}
+  }
+
+  function onPointerMove(e) {
+    if (!draggingRef.current) return
+    const panel = panelRef.current
+    if (!panel) return
+
+    const w = window.innerWidth
+    const h = window.innerHeight
+
+    const panelRect = panel.getBoundingClientRect()
+    const width = panelRect.width
+    const height = panelRect.height
+
+    let x = e.clientX - dragOffsetRef.current.dx
+    let y = e.clientY - dragOffsetRef.current.dy
+
+    // 限制不拖出屏幕
+    x = Math.max(8, Math.min(x, w - width - 8))
+    y = Math.max(8, Math.min(y, h - height - 8))
+
+    setPos({ x, y })
+  }
+
+  function onPointerUp() {
+    draggingRef.current = false
+  }
+
+  async function safeReadJson(res) {
+    const text = await res.text()
+    try {
+      return { ok: true, json: JSON.parse(text) }
+    } catch {
+      return { ok: false, raw: text }
+    }
+  }
+
+  async function send() {
+    const content = input.trim()
+    if (!content || loading) return
+
     setLoading(true)
+    setInput('')
+
+    // 先把用户消息塞进上下文
+    const nextMsgs = [...messages, { role: 'user', content }]
+    setMessages(nextMsgs)
 
     try {
       const res = await fetch('/api/deepseek-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: userMsg,
-          // ✅ 连续对话上下文一起发给 API（你要的）
-          history: nextChat.slice(-12) // 只带最近 12 轮，防 token 爆
+          // 连续对话就靠这个 messages
+          messages: nextMsgs
         })
       })
 
-      const raw = await res.text()
+      const parsed = await safeReadJson(res)
 
-      let data
-      try {
-        data = JSON.parse(raw)
-      } catch (e) {
-        throw new Error(`API返回不是JSON：\n${raw.slice(0, 400)}`)
+      if (!parsed.ok) {
+        setMessages(m => [
+          ...m,
+          {
+            role: 'assistant',
+            content: `【错误】Error: API返回不是JSON：\n${parsed.raw || ''}`
+          }
+        ])
+        return
       }
 
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`)
+      const data = parsed.json
+      if (!res.ok) {
+        setMessages(m => [
+          ...m,
+          {
+            role: 'assistant',
+            content:
+              `【错误】${data?.error || '请求失败'}\n` +
+              (data?.raw ? `\n${String(data.raw).slice(0, 2000)}` : '')
+          }
+        ])
+        return
+      }
 
-      const answer = data?.answer || '（无返回内容）'
-      setChat(prev => [...prev, { role: 'assistant', content: answer }])
+      setMessages(m => [
+        ...m,
+        { role: 'assistant', content: data?.answer || '（无返回内容）' }
+      ])
     } catch (e) {
-      setChat(prev => [
-        ...prev,
+      setMessages(m => [
+        ...m,
         { role: 'assistant', content: `【错误】${String(e)}` }
       ])
     } finally {
@@ -130,171 +163,188 @@ export default function MemoryChatWidget() {
     }
   }
 
-  // esc 关闭 + Ctrl/Cmd+Enter 发送
-  useEffect(() => {
-    const onKey = e => {
-      if (e.key === 'Escape') setOpen(false)
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') ask()
+  function clearAll() {
+    setMessages([])
+    setInput('')
+  }
+
+  function onKeyDown(e) {
+    // Ctrl/Cmd + Enter 发送；Enter 默认换行（避免你打字被误发）
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault()
+      send()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
+  }
 
-  // 自动滚到底
-  useEffect(() => {
-    if (!open) return
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [chat, open])
+  const panelStyle = {
+    position: 'fixed',
+    // 用 pos.x/pos.y 拖动定位；否则默认右下角
+    right: pos.x == null ? 18 : 'auto',
+    bottom: pos.y == null ? 72 : 'auto',
+    left: pos.x != null ? pos.x : 'auto',
+    top: pos.y != null ? pos.y : 'auto',
 
-  // ====== UI样式 ======
-  const styles = useMemo(
-    () => ({
-      btn: {
-        position: 'fixed',
-        right: 18,
-        bottom: 18,
-        zIndex: 9999,
-        borderRadius: 999,
-        padding: '10px 14px',
-        background: 'rgba(0,0,0,0.6)',
-        color: '#fff',
-        border: '1px solid rgba(255,255,255,0.25)',
-        cursor: 'pointer'
-      },
-      panel: {
-        position: 'fixed',
-        right: pos.right,
-        bottom: pos.bottom,
-        width: 420,
-        maxWidth: 'calc(100vw - 36px)',
-        zIndex: 9999,
-        background: '#fff',
-        borderRadius: 14,
-        boxShadow: '0 18px 50px rgba(0,0,0,0.22)',
-        border: '1px solid rgba(0,0,0,0.08)',
-        overflow: 'hidden'
-      },
-      header: {
-        padding: '12px 14px',
-        fontWeight: 800,
-        borderBottom: '1px solid rgba(0,0,0,0.08)',
-        cursor: 'move',
-        userSelect: 'none',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between'
-      },
-      chatBox: {
-        background: '#f9fafb',
-        border: '1px solid rgba(0,0,0,0.08)',
-        borderRadius: 12,
-        padding: 12,
-        height: 260,
-        overflow: 'auto'
-      },
-      bubbleRow: role => ({
-        display: 'flex',
-        justifyContent: role === 'user' ? 'flex-end' : 'flex-start',
-        marginBottom: 10
-      }),
-      bubble: role => ({
-        maxWidth: '82%',
-        padding: '10px 12px',
-        borderRadius: 14,
-        whiteSpace: 'pre-wrap',
-        lineHeight: 1.6,
-        background: role === 'user' ? '#111827' : '#fff',
-        color: role === 'user' ? '#fff' : '#111',
-        border: role === 'user' ? 'none' : '1px solid rgba(0,0,0,0.12)',
-        boxShadow:
-          role === 'user'
-            ? '0 8px 18px rgba(17,24,39,0.18)'
-            : '0 8px 18px rgba(0,0,0,0.06)'
-      }),
-      input: {
-        width: '100%',
-        height: 90,
-        resize: 'none',
-        borderRadius: 12,
-        border: '1px solid rgba(0,0,0,0.12)',
-        padding: 12,
-        outline: 'none',
-        marginTop: 10
-      },
-      btnRow: { display: 'flex', gap: 8, marginTop: 10 },
-      sendBtn: {
-        flex: 1,
-        borderRadius: 12,
-        padding: '12px 12px',
-        background: '#111827',
-        color: '#fff',
-        border: 'none',
-        cursor: loading ? 'not-allowed' : 'pointer',
-        opacity: loading ? 0.7 : 1
-      },
-      clearBtn: {
-        borderRadius: 12,
-        padding: '12px 12px',
-        background: '#fff',
-        border: '1px solid rgba(0,0,0,0.15)',
-        cursor: 'pointer'
-      }
-    }),
-    [pos.right, pos.bottom, loading]
-  )
+    width: 380,
+    maxWidth: 'calc(100vw - 24px)',
+    height: 520,
+    maxHeight: 'calc(100vh - 24px)',
 
-  return (
+    zIndex: 2147483647, // 彻底置顶，避免被任何框架盖住
+    background: '#fff',
+    borderRadius: 14,
+    boxShadow: '0 18px 50px rgba(0,0,0,0.22)',
+    border: '1px solid rgba(0,0,0,0.10)',
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column'
+  }
+
+  const btnStyle = {
+    position: 'fixed',
+    right: 18,
+    bottom: 18,
+    zIndex: 2147483647,
+    borderRadius: 999,
+    padding: '10px 14px',
+    background: 'rgba(0,0,0,0.70)',
+    color: '#fff',
+    border: '1px solid rgba(255,255,255,0.25)',
+    cursor: 'pointer'
+  }
+
+  const ui = (
     <>
-      <button onClick={() => setOpen(v => !v)} style={styles.btn}>
+      {/* 右下角按钮 */}
+      <button onClick={() => setOpen(v => !v)} style={btnStyle}>
         {open ? '关闭' : '问问茶色'}
       </button>
 
+      {/* 弹窗 */}
       {open && (
-        <div style={styles.panel}>
-          {/* 拖动区域：标题栏 */}
+        <div ref={panelRef} style={panelStyle}>
+          {/* 可拖动标题栏 */}
           <div
-            style={styles.header}
-            onMouseDown={onDragStart}
-            onTouchStart={onDragStart}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            style={{
+              padding: '10px 12px',
+              fontWeight: 800,
+              borderBottom: '1px solid rgba(0,0,0,0.08)',
+              cursor: 'grab',
+              userSelect: 'none',
+              background: '#fff'
+            }}
           >
-            <div>我正在狠狠回答</div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>拖动这里</div>
+            我正在狠狠回答
+            <span style={{ fontWeight: 500, marginLeft: 8, fontSize: 12, opacity: 0.6 }}>
+              （拖动这里移动；Ctrl/Cmd+Enter 发送）
+            </span>
           </div>
 
-          <div style={{ padding: 12 }}>
-            <div style={styles.chatBox}>
-              {chat.length === 0 ? (
-                <div style={{ color: '#6b7280', fontSize: 13 }}>
-                  直接问。支持 Ctrl/Cmd + Enter 发送。
-                </div>
-              ) : (
-                chat.map((m, idx) => (
-                  <div key={idx} style={styles.bubbleRow(m.role)}>
-                    <div style={styles.bubble(m.role)}>{m.content}</div>
-                  </div>
-                ))
-              )}
-              <div ref={chatEndRef} />
-            </div>
+          {/* 消息区 */}
+          <div
+            style={{
+              padding: 12,
+              overflow: 'auto',
+              flex: 1,
+              background: '#fafafa'
+            }}
+          >
+            {messages.length === 0 && (
+              <div style={{ opacity: 0.55, fontSize: 13, lineHeight: 1.6 }}>
+                你可以直接问。这个窗口会带着上下文连续对话。
+              </div>
+            )}
 
+            {messages.map((m, idx) => {
+              const isUser = m.role === 'user'
+              return (
+                <div
+                  key={idx}
+                  style={{
+                    display: 'flex',
+                    justifyContent: isUser ? 'flex-end' : 'flex-start',
+                    marginTop: 10
+                  }}
+                >
+                  <div
+                    style={{
+                      maxWidth: '78%',
+                      padding: '10px 12px',
+                      borderRadius: 14,
+                      whiteSpace: 'pre-wrap',
+                      lineHeight: 1.55,
+                      fontSize: 14,
+                      background: isUser ? '#111827' : '#fff',
+                      color: isUser ? '#fff' : '#111',
+                      border: isUser ? 'none' : '1px solid rgba(0,0,0,0.08)',
+                      boxShadow: isUser ? '0 10px 30px rgba(17,24,39,0.25)' : 'none'
+                    }}
+                  >
+                    {m.content}
+                  </div>
+                </div>
+              )
+            })}
+
+            {loading && (
+              <div style={{ marginTop: 10, opacity: 0.7, fontSize: 13 }}>
+                思考中…
+              </div>
+            )}
+          </div>
+
+          {/* 输入区 */}
+          <div
+            style={{
+              padding: 10,
+              borderTop: '1px solid rgba(0,0,0,0.08)',
+              background: '#fff'
+            }}
+          >
             <textarea
-              value={message}
-              onChange={e => setMessage(e.target.value)}
-              placeholder="输入问题…（Ctrl/Cmd + Enter 发送）"
-              style={styles.input}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="输入问题…（Ctrl/Cmd+Enter 发送）"
+              style={{
+                width: '100%',
+                height: 72,
+                resize: 'none',
+                borderRadius: 10,
+                border: '1px solid rgba(0,0,0,0.12)',
+                padding: 10,
+                outline: 'none'
+              }}
             />
 
-            <div style={styles.btnRow}>
-              <button onClick={ask} disabled={loading} style={styles.sendBtn}>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button
+                onClick={send}
+                disabled={loading}
+                style={{
+                  flex: 1,
+                  borderRadius: 10,
+                  padding: '10px 12px',
+                  background: '#111827',
+                  color: '#fff',
+                  border: 'none',
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  opacity: loading ? 0.7 : 1
+                }}
+              >
                 {loading ? '思考中…' : '发送'}
               </button>
-
               <button
-                onClick={() => {
-                  setMessage('')
-                  setChat([])
+                onClick={clearAll}
+                style={{
+                  borderRadius: 10,
+                  padding: '10px 12px',
+                  background: '#fff',
+                  border: '1px solid rgba(0,0,0,0.15)',
+                  cursor: 'pointer'
                 }}
-                style={styles.clearBtn}
               >
                 清空
               </button>
@@ -304,4 +354,8 @@ export default function MemoryChatWidget() {
       )}
     </>
   )
+
+  // 关键：Portal 到 body，避免被某些父容器 transform/overflow 盖住
+  if (!mounted) return null
+  return createPortal(ui, document.body)
 }
