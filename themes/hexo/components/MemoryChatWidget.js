@@ -7,7 +7,7 @@ export default function MemoryChatWidget() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // 对话上下文（连续）
+  // 连续上下文
   const [messages, setMessages] = useState([]) // [{role:'user'|'assistant', content:string}]
 
   // 拖动位置（持久化）
@@ -16,18 +16,15 @@ export default function MemoryChatWidget() {
       const s = localStorage.getItem('memory_chat_pos')
       if (s) return JSON.parse(s)
     } catch {}
-    return { x: null, y: null } // null 表示用右下角默认定位
+    return { x: null, y: null }
   }, [])
-
   const [pos, setPos] = useState(defaultPos)
 
   const draggingRef = useRef(false)
   const dragOffsetRef = useRef({ dx: 0, dy: 0 })
   const panelRef = useRef(null)
 
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  useEffect(() => setMounted(true), [])
 
   // esc 关闭
   useEffect(() => {
@@ -46,26 +43,16 @@ export default function MemoryChatWidget() {
     } catch {}
   }, [pos, mounted])
 
-  // 拖动逻辑（Pointer Events）
   function onPointerDown(e) {
-    // 只允许从标题栏拖动
     draggingRef.current = true
     const panel = panelRef.current
     if (!panel) return
     const rect = panel.getBoundingClientRect()
-
-    // 计算鼠标点到面板左上角的偏移
-    dragOffsetRef.current = {
-      dx: e.clientX - rect.left,
-      dy: e.clientY - rect.top
-    }
-
-    // 捕获指针
+    dragOffsetRef.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top }
     try {
       e.currentTarget.setPointerCapture(e.pointerId)
     } catch {}
   }
-
   function onPointerMove(e) {
     if (!draggingRef.current) return
     const panel = panelRef.current
@@ -73,31 +60,30 @@ export default function MemoryChatWidget() {
 
     const w = window.innerWidth
     const h = window.innerHeight
-
-    const panelRect = panel.getBoundingClientRect()
-    const width = panelRect.width
-    const height = panelRect.height
+    const rect = panel.getBoundingClientRect()
 
     let x = e.clientX - dragOffsetRef.current.dx
     let y = e.clientY - dragOffsetRef.current.dy
 
-    // 限制不拖出屏幕
-    x = Math.max(8, Math.min(x, w - width - 8))
-    y = Math.max(8, Math.min(y, h - height - 8))
+    x = Math.max(8, Math.min(x, w - rect.width - 8))
+    y = Math.max(8, Math.min(y, h - rect.height - 8))
 
     setPos({ x, y })
   }
-
   function onPointerUp() {
     draggingRef.current = false
   }
 
-  async function safeReadJson(res) {
+  async function readBodyAlways(res) {
+    // 一律先读 text，再尝试 json
     const text = await res.text()
+    if (!text) {
+      return { ok: false, empty: true, raw: '', status: res.status, statusText: res.statusText }
+    }
     try {
-      return { ok: true, json: JSON.parse(text) }
+      return { ok: true, json: JSON.parse(text), raw: text, status: res.status, statusText: res.statusText }
     } catch {
-      return { ok: false, raw: text }
+      return { ok: false, empty: false, raw: text, status: res.status, statusText: res.statusText }
     }
   }
 
@@ -108,7 +94,6 @@ export default function MemoryChatWidget() {
     setLoading(true)
     setInput('')
 
-    // 先把用户消息塞进上下文
     const nextMsgs = [...messages, { role: 'user', content }]
     setMessages(nextMsgs)
 
@@ -116,48 +101,49 @@ export default function MemoryChatWidget() {
       const res = await fetch('/api/deepseek-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          // 连续对话就靠这个 messages
-          messages: nextMsgs
-        })
+        body: JSON.stringify({ messages: nextMsgs })
       })
 
-      const parsed = await safeReadJson(res)
+      const parsed = await readBodyAlways(res)
 
+      // 任何非 JSON/空响应：直接把状态码+原文打印出来
       if (!parsed.ok) {
+        const rawText =
+          parsed.empty
+            ? '（空响应 body=""）'
+            : String(parsed.raw).slice(0, 3000)
+
         setMessages(m => [
           ...m,
           {
             role: 'assistant',
-            content: `【错误】Error: API返回不是JSON：\n${parsed.raw || ''}`
+            content:
+              `【错误】API返回不是JSON\n` +
+              `HTTP ${parsed.status} ${parsed.statusText}\n` +
+              rawText
           }
         ])
         return
       }
 
-      const data = parsed.json
+      // JSON 但非 2xx
       if (!res.ok) {
         setMessages(m => [
           ...m,
           {
             role: 'assistant',
             content:
-              `【错误】${data?.error || '请求失败'}\n` +
-              (data?.raw ? `\n${String(data.raw).slice(0, 2000)}` : '')
+              `【错误】HTTP ${parsed.status} ${parsed.statusText}\n` +
+              (parsed.json?.error ? String(parsed.json.error) : JSON.stringify(parsed.json))
           }
         ])
         return
       }
 
-      setMessages(m => [
-        ...m,
-        { role: 'assistant', content: data?.answer || '（无返回内容）' }
-      ])
+      const answer = parsed.json?.answer || '（无返回内容）'
+      setMessages(m => [...m, { role: 'assistant', content: answer }])
     } catch (e) {
-      setMessages(m => [
-        ...m,
-        { role: 'assistant', content: `【错误】${String(e)}` }
-      ])
+      setMessages(m => [...m, { role: 'assistant', content: `【错误】${String(e)}` }])
     } finally {
       setLoading(false)
     }
@@ -169,7 +155,6 @@ export default function MemoryChatWidget() {
   }
 
   function onKeyDown(e) {
-    // Ctrl/Cmd + Enter 发送；Enter 默认换行（避免你打字被误发）
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
       send()
@@ -178,18 +163,17 @@ export default function MemoryChatWidget() {
 
   const panelStyle = {
     position: 'fixed',
-    // 用 pos.x/pos.y 拖动定位；否则默认右下角
     right: pos.x == null ? 18 : 'auto',
     bottom: pos.y == null ? 72 : 'auto',
     left: pos.x != null ? pos.x : 'auto',
     top: pos.y != null ? pos.y : 'auto',
 
-    width: 380,
+    width: 420,
     maxWidth: 'calc(100vw - 24px)',
-    height: 520,
+    height: 560,
     maxHeight: 'calc(100vh - 24px)',
 
-    zIndex: 2147483647, // 彻底置顶，避免被任何框架盖住
+    zIndex: 2147483647,
     background: '#fff',
     borderRadius: 14,
     boxShadow: '0 18px 50px rgba(0,0,0,0.22)',
@@ -214,15 +198,12 @@ export default function MemoryChatWidget() {
 
   const ui = (
     <>
-      {/* 右下角按钮 */}
       <button onClick={() => setOpen(v => !v)} style={btnStyle}>
         {open ? '关闭' : '问问茶色'}
       </button>
 
-      {/* 弹窗 */}
       {open && (
         <div ref={panelRef} style={panelStyle}>
-          {/* 可拖动标题栏 */}
           <div
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -242,35 +223,17 @@ export default function MemoryChatWidget() {
             </span>
           </div>
 
-          {/* 消息区 */}
-          <div
-            style={{
-              padding: 12,
-              overflow: 'auto',
-              flex: 1,
-              background: '#fafafa'
-            }}
-          >
-            {messages.length === 0 && (
-              <div style={{ opacity: 0.55, fontSize: 13, lineHeight: 1.6 }}>
-                你可以直接问。这个窗口会带着上下文连续对话。
-              </div>
-            )}
-
+          <div style={{ padding: 12, overflow: 'auto', flex: 1, background: '#fafafa' }}>
             {messages.map((m, idx) => {
               const isUser = m.role === 'user'
               return (
                 <div
                   key={idx}
-                  style={{
-                    display: 'flex',
-                    justifyContent: isUser ? 'flex-end' : 'flex-start',
-                    marginTop: 10
-                  }}
+                  style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start', marginTop: 10 }}
                 >
                   <div
                     style={{
-                      maxWidth: '78%',
+                      maxWidth: '80%',
                       padding: '10px 12px',
                       borderRadius: 14,
                       whiteSpace: 'pre-wrap',
@@ -278,8 +241,7 @@ export default function MemoryChatWidget() {
                       fontSize: 14,
                       background: isUser ? '#111827' : '#fff',
                       color: isUser ? '#fff' : '#111',
-                      border: isUser ? 'none' : '1px solid rgba(0,0,0,0.08)',
-                      boxShadow: isUser ? '0 10px 30px rgba(17,24,39,0.25)' : 'none'
+                      border: isUser ? 'none' : '1px solid rgba(0,0,0,0.08)'
                     }}
                   >
                     {m.content}
@@ -288,21 +250,10 @@ export default function MemoryChatWidget() {
               )
             })}
 
-            {loading && (
-              <div style={{ marginTop: 10, opacity: 0.7, fontSize: 13 }}>
-                思考中…
-              </div>
-            )}
+            {loading && <div style={{ marginTop: 10, opacity: 0.7, fontSize: 13 }}>思考中…</div>}
           </div>
 
-          {/* 输入区 */}
-          <div
-            style={{
-              padding: 10,
-              borderTop: '1px solid rgba(0,0,0,0.08)',
-              background: '#fff'
-            }}
-          >
+          <div style={{ padding: 10, borderTop: '1px solid rgba(0,0,0,0.08)', background: '#fff' }}>
             <textarea
               value={input}
               onChange={e => setInput(e.target.value)}
@@ -310,7 +261,7 @@ export default function MemoryChatWidget() {
               placeholder="输入问题…（Ctrl/Cmd+Enter 发送）"
               style={{
                 width: '100%',
-                height: 72,
+                height: 80,
                 resize: 'none',
                 borderRadius: 10,
                 border: '1px solid rgba(0,0,0,0.12)',
@@ -336,6 +287,7 @@ export default function MemoryChatWidget() {
               >
                 {loading ? '思考中…' : '发送'}
               </button>
+
               <button
                 onClick={clearAll}
                 style={{
@@ -355,7 +307,6 @@ export default function MemoryChatWidget() {
     </>
   )
 
-  // 关键：Portal 到 body，避免被某些父容器 transform/overflow 盖住
   if (!mounted) return null
   return createPortal(ui, document.body)
 }
