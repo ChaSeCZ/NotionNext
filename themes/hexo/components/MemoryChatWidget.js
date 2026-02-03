@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export default function MemoryChatWidget() {
-  const [open, setOpen] = useState(false)
+  const [mounted, setMounted] = useState(false)
+  const [open, setOpen] = useState(true)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // 连续上下文
+  // 连续上下文（对话历史）
   const [chat, setChat] = useState([]) // [{role:'user'|'assistant', content:string}]
 
   // 拖动
@@ -14,9 +16,7 @@ export default function MemoryChatWidget() {
   const dragStart = useRef({ x: 0, y: 0 })
   const posStart = useRef({ x: 0, y: 0 })
 
-  // 你也可以不传 memory，让后端只读 Notion 的记忆
-  // 这里留空，避免“你写了的固定记忆”覆盖 Notion 记忆
-  const memoryText = ''
+  useEffect(() => setMounted(true), [])
 
   async function send() {
     const q = input.trim()
@@ -28,19 +28,15 @@ export default function MemoryChatWidget() {
     setLoading(true)
 
     try {
-      const payload = {
-        messages: nextChat.map(m => ({ role: m.role, content: m.content })),
-        memory: memoryText
-      }
-
       const r = await fetch('/api/deepseek-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          messages: nextChat // ✅ 连续上下文直接传给后端
+        })
       })
 
       const txt = await r.text()
-
       let data
       try {
         data = JSON.parse(txt)
@@ -48,23 +44,14 @@ export default function MemoryChatWidget() {
         throw new Error(`API返回不是JSON\nHTTP ${r.status}\n(body=${txt || '""'})`)
       }
 
-      // 你要确认有没有读到 Notion 记忆：看这里
-      // 打开浏览器 console 会看到 memoryMeta
-      if (data?.memoryMeta) {
-        console.log('[memoryMeta]', data.memoryMeta)
-      }
-
       if (!r.ok) {
         throw new Error(data?.error || `HTTP ${r.status}`)
       }
 
-      const a = (data?.answer || '').trim()
-      setChat(cur => [...cur, { role: 'assistant', content: a || '（无返回内容）' }])
+      const a = String(data?.answer || '').trim() || '（无返回内容）'
+      setChat(cur => [...cur, { role: 'assistant', content: a }])
     } catch (e) {
-      setChat(cur => [
-        ...cur,
-        { role: 'assistant', content: `【错误】${String(e.message || e)}` }
-      ])
+      setChat(cur => [...cur, { role: 'assistant', content: `【错误】${String(e.message || e)}` }])
     } finally {
       setLoading(false)
     }
@@ -116,7 +103,9 @@ export default function MemoryChatWidget() {
     }
   }, [pos])
 
-  return (
+  if (!mounted) return null
+
+  const ui = (
     <>
       <button
         onClick={() => setOpen(v => !v)}
@@ -127,7 +116,7 @@ export default function MemoryChatWidget() {
           zIndex: 2147483647,
           borderRadius: 999,
           padding: '10px 14px',
-          background: 'rgba(0,0,0,0.6)',
+          background: 'rgba(0,0,0,0.65)',
           color: '#fff',
           border: '1px solid rgba(255,255,255,0.25)',
           cursor: 'pointer'
@@ -150,7 +139,7 @@ export default function MemoryChatWidget() {
             background: '#fff',
             borderRadius: 16,
             boxShadow: '0 18px 50px rgba(0,0,0,0.22)',
-            border: '1px solid rgba(0,0,0,0.08)',
+            border: '1px solid rgba(0,0,0,0.10)',
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column'
@@ -172,20 +161,7 @@ export default function MemoryChatWidget() {
             </span>
           </div>
 
-          <div
-            style={{
-              padding: 14,
-              flex: 1,
-              overflow: 'auto',
-              background: '#fafafa'
-            }}
-          >
-            {chat.length === 0 && (
-              <div style={{ opacity: 0.6, fontSize: 14 }}>
-                输入问题开始对话（会保留上下文）
-              </div>
-            )}
-
+          <div style={{ padding: 14, flex: 1, overflow: 'auto', background: '#fafafa' }}>
             {chat.map((m, idx) => {
               const isMe = m.role === 'user'
               return (
@@ -215,7 +191,6 @@ export default function MemoryChatWidget() {
                 </div>
               )
             })}
-
             {loading && <div style={{ opacity: 0.7, fontSize: 14 }}>思考中…</div>}
           </div>
 
@@ -232,8 +207,7 @@ export default function MemoryChatWidget() {
                 borderRadius: 12,
                 border: '1px solid rgba(0,0,0,0.12)',
                 padding: 12,
-                outline: 'none',
-                background: '#fff'
+                outline: 'none'
               }}
             />
 
@@ -273,4 +247,7 @@ export default function MemoryChatWidget() {
       )}
     </>
   )
+
+  // ✅ 关键：Portal 到 body，彻底解决“被盖住/被卡在下面”
+  return createPortal(ui, document.body)
 }
