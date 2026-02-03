@@ -1,22 +1,30 @@
 // pages/api/deepseek-chat.js
-
 const path = require('path')
 
-// ✅ 直接用绝对路径 require，避免你之前那种 @/lib/notion / ../../lib/notion 全部炸掉的问题
 const notionPostModule = require(path.join(process.cwd(), 'lib/notion/getNotionPost.js'))
 const notionTextModule = require(path.join(process.cwd(), 'lib/notion/getPageContentText.js'))
 
+// 兼容不同导出方式
 const getPostBySlug =
+  notionPostModule.getPostBySlug ||
   notionPostModule.getPostBySlug ||
   (notionPostModule.default && notionPostModule.default.getPostBySlug) ||
   notionPostModule.default
 
 const getPageContentText =
   notionTextModule.getPageContentText ||
+  notionTextModule.getPageContentText ||
   notionTextModule.default ||
   notionTextModule
 
-const VERSION = 'deepseek-chat-api-2026-02-03-v1'
+const VERSION = 'deepseek-chat-api-2026-02-03-v3'
+
+function json(res, status, data) {
+  res.status(status)
+  res.setHeader('Content-Type', 'application/json; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-store')
+  return res.end(JSON.stringify(data))
+}
 
 function clampText(s, max = 14000) {
   if (!s) return ''
@@ -25,22 +33,26 @@ function clampText(s, max = 14000) {
 }
 
 async function loadMemoryFromNotion() {
-  // ✅ 这里写死优先读 memory（你 Notion 的 slug 最好就叫 memory）
-  // 如果你坚持用 memroy，也会尝试读到
+  // 你 Notion 里可能写错过：memroy/memort/memory-core 等都兜底
   const candidates = [
-    process.env.MEMORY_SLUG, // 可选：Vercel 环境变量 MEMORY_SLUG=memory
+    process.env.MEMORY_SLUG,
     'memory',
     'memroy',
     'memory-core',
-    'memort'
+    'memort',
+    'memorty'
   ].filter(Boolean)
 
   for (const slug of candidates) {
     try {
+      if (!getPostBySlug) continue
       const page = await getPostBySlug(slug)
       if (!page || !page.blockMap) continue
 
-      const bodyText = await getPageContentText(page.blockMap)
+      let body = ''
+      try {
+        if (getPageContentText) body = await getPageContentText(page.blockMap)
+      } catch (e) {}
 
       const title = page?.title ? String(page.title) : ''
       const summary = page?.summary ? String(page.summary) : ''
@@ -50,70 +62,53 @@ async function loadMemoryFromNotion() {
 【摘要】${summary}
 
 【正文】
-${bodyText || ''}`
+${body || ''}`
 
       return { ok: true, slug, text: clampText(merged) }
-    } catch (e) {
-      // 继续尝试下一个 slug
-    }
+    } catch (e) {}
   }
-
   return { ok: false, slug: null, text: '' }
 }
 
-export default async function handler(req, res) {
-  res.setHeader('Content-Type', 'application/json; charset=utf-8')
-  res.setHeader('Cache-Control', 'no-store')
+module.exports = async function handler(req, res) {
+  // 任何情况都返回 JSON（别再让前端爆 JSON.parse）
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204
+    return res.end()
+  }
 
-  const method = (req.method || '').toUpperCase()
+  // 允许 GET 做 ping（你控制台那条用得上）
+  if (req.method === 'GET') {
+    const msg = (req.query && req.query.message) || 'ping'
+    return json(res, 200, { ok: true, version: VERSION, message: msg })
+  }
 
-  // ✅ 允许 GET/POST，避免你再看到 405 + 空 body
-  if (method !== 'POST' && method !== 'GET') {
-    return res.status(200).json({
-      ok: false,
-      version: VERSION,
-      answer: '',
-      error: `Method ${method} not supported. Use POST or GET.`
-    })
+  if (req.method !== 'POST') {
+    return json(res, 405, { ok: false, version: VERSION, error: 'Method Not Allowed' })
   }
 
   try {
     const apiKey = process.env.DEEPSEEK_API_KEY
-    if (!apiKey) {
-      return res.status(200).json({
-        ok: false,
-        version: VERSION,
-        answer: '',
-        error: 'Missing DEEPSEEK_API_KEY'
-      })
-    }
+    if (!apiKey) return json(res, 500, { ok: false, version: VERSION, error: 'Missing DEEPSEEK_API_KEY' })
 
-    const message =
-      (method === 'POST' ? (req.body || {}).message : req.query.message) || ''
-    const history = (method === 'POST' ? (req.body || {}).history : []) || []
+    const body = req.body || {}
+    const message = body.message || ''
+    const history = body.history || []
 
     if (!String(message).trim()) {
-      return res.status(200).json({
-        ok: false,
-        version: VERSION,
-        answer: '',
-        error: 'Missing message'
-      })
+      return json(res, 400, { ok: false, version: VERSION, error: 'Missing message' })
     }
 
-    // ✅ 读 Notion 记忆（正文）
     const mem = await loadMemoryFromNotion()
 
-    // ✅ 你要的：像“你本人”，直但不失礼，不编造
     const system = `
 你就是“杨超哲（Tawney / 茶色）本人”的数字化分身，不是助理口吻。
-要求：
-- 用第一人称“我”回答。
+硬规则：
+- 全程第一人称“我”。
 - 直接、清晰、有判断，但保持礼貌（INTJ：冷静克制、讲逻辑，不粗鲁）。
-- 严禁编造：如果【Notion记忆】没有写，就明确说“我不记得/笔记里没写”，并追问1个关键问题。
-- 如果用户问“你好/你是谁”，按人类口吻回答：
+- 严禁编造：只允许使用【Notion记忆】里的事实。记忆没写就说“我不记得/笔记里没写”，并追问1个关键问题。
+- 当用户问“你好/你是谁”，用人类口吻回答：
   “你好，我是杨超哲，也可以叫我茶色。你想聊什么？”
-优先以【Notion记忆】为准。
 `.trim()
 
     const safeHistory = Array.isArray(history)
@@ -142,7 +137,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: 'deepseek-chat',
         messages,
-        temperature: 0.7
+        temperature: 0.65
       })
     })
 
@@ -151,39 +146,35 @@ export default async function handler(req, res) {
     let data
     try {
       data = JSON.parse(raw)
-    } catch {
-      return res.status(200).json({
+    } catch (e) {
+      return json(res, 500, {
         ok: false,
         version: VERSION,
-        answer: '',
         error: 'DeepSeek returned non-JSON',
         debug: {
           httpStatus: resp.status,
           bodyPreview: raw ? raw.slice(0, 300) : '(empty)',
           memoryLoaded: mem.ok,
           memorySlug: mem.slug,
-          memoryChars: mem.text ? mem.text.length : 0
+          memoryChars: mem.text?.length || 0
         }
       })
     }
 
     const answer = data?.choices?.[0]?.message?.content || ''
-    return res.status(200).json({
+
+    return json(res, 200, {
       ok: true,
       version: VERSION,
       answer: answer || '（无返回内容）',
       debug: {
         memoryLoaded: mem.ok,
         memorySlug: mem.slug,
-        memoryChars: mem.text ? mem.text.length : 0
+        memoryChars: mem.text?.length || 0,
+        usedHistory: safeHistory.length
       }
     })
   } catch (e) {
-    return res.status(200).json({
-      ok: false,
-      version: VERSION,
-      answer: '',
-      error: String(e)
-    })
+    return json(res, 500, { ok: false, version: VERSION, error: String(e) })
   }
 }
