@@ -1,97 +1,146 @@
 // pages/api/deepseek-chat.js
 
-import getNotionPost from '../../lib/notion/getNotionPost'
-import getPageContentText from '../../lib/notion/getPageContentText'
+const path = require('path')
+
+// ✅ 用明确文件路径导入（避免 “Can't resolve ../../lib/notion”）
+const notionPostModule = require(path.join(
+  process.cwd(),
+  'lib/notion/getNotionPost.js'
+))
+const notionTextModule = require(path.join(
+  process.cwd(),
+  'lib/notion/getPageContentText.js'
+))
+
+const getPostBySlug =
+  notionPostModule.getPostBySlug ||
+  (notionPostModule.default && notionPostModule.default.getPostBySlug) ||
+  notionPostModule.default
+
+const getPageContentText =
+  notionTextModule.getPageContentText ||
+  notionTextModule.default ||
+  notionTextModule
+
+function clampText(s, max = 12000) {
+  if (!s) return ''
+  const t = String(s)
+  return t.length > max ? t.slice(0, max) + '\n…（已截断）' : t
+}
+
+// 尝试多个 slug，避免你 Notion 里拼写不一致导致“读不到”
+async function loadMemoryFromNotion() {
+  const candidates = [
+    process.env.MEMORY_SLUG,
+    'memory',
+    'memory-core',
+    'memroy',
+    'memort'
+  ].filter(Boolean)
+
+  for (const slug of candidates) {
+    try {
+      const page = await getPostBySlug(slug)
+      if (!page || !page.blockMap) continue
+
+      // ✅ 读正文文本（不是只读 summary）
+      const bodyText = await getPageContentText(page.blockMap)
+      const title = page?.title ? String(page.title) : ''
+      const summary = page?.summary ? String(page.summary) : ''
+
+      const merged = `【Notion记忆页】${slug}
+【标题】${title}
+【摘要】${summary}
+
+【正文】
+${bodyText || ''}`
+
+      const finalText = clampText(merged, 14000)
+      return { ok: true, slug, text: finalText }
+    } catch (e) {
+      // 尝试下一个 slug
+    }
+  }
+  return { ok: false, slug: null, text: '' }
+}
 
 export default async function handler(req, res) {
-  // ====== CORS + 预检（解决 405）======
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+  // 永远返回 JSON（避免前端 .json() 报错）
+  res.setHeader('Content-Type', 'application/json; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-store')
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end('')
-  }
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' })
+  // ✅ 允许 POST / GET（避免你再看到 405）
+  const method = (req.method || '').toUpperCase()
+  if (method !== 'POST' && method !== 'GET') {
+    return res.status(200).json({
+      answer: '',
+      error: `Method ${method} not supported. Use POST or GET.`,
+      debug: { method }
+    })
   }
 
   try {
     const apiKey = process.env.DEEPSEEK_API_KEY
     if (!apiKey) {
-      return res.status(500).json({ error: 'Missing DEEPSEEK_API_KEY' })
+      return res.status(200).json({
+        answer: '',
+        error: 'Missing DEEPSEEK_API_KEY',
+        debug: { method }
+      })
     }
 
-    const { message, history } = req.body || {}
-    if (!message || !String(message).trim()) {
-      return res.status(400).json({ error: 'Missing message' })
+    // GET 也能测：/api/deepseek-chat?message=xxx
+    const body = method === 'POST' ? req.body || {} : {}
+    const message =
+      (method === 'POST' ? body.message : req.query.message) || ''
+    const history =
+      (method === 'POST' ? body.history : []) || []
+
+    if (!String(message).trim()) {
+      return res.status(200).json({
+        answer: '',
+        error: 'Missing message',
+        debug: { method }
+      })
     }
 
-    // ====== 从 Notion 读取记忆（用 pageId 最稳）======
-    const memoryPageId = process.env.MEMORY_PAGE_ID // 例如：d7e96987-c91f-409f-8df5-0a8ff8c7e7a7
-    let memoryText = ''
+    // ✅ 读取 Notion 记忆
+    const mem = await loadMemoryFromNotion()
 
-    if (memoryPageId) {
-      try {
-        const memoryPost = await getNotionPost(memoryPageId)
-        // getPageContentText 一般接受 blockMap；如果你这仓库实现不同，也不会影响整体（下面兜底）
-        if (memoryPost?.blockMap) {
-          const bodyText = await getPageContentText(memoryPost.blockMap)
-          memoryText = `${memoryPost?.title || '记忆'}\n\n${bodyText || ''}`.trim()
-        } else {
-          memoryText = `${memoryPost?.title || ''}\n${memoryPost?.summary || ''}`.trim()
-        }
-      } catch (e) {
-        memoryText = ''
-      }
-    }
-
-    // ====== 系统提示词：拟人化 + INTJ 直接但有礼貌 + 禁止编造 ======
+    // ✅ 你要的“拟人 + 直接但礼貌 + 不编造”
     const system = `
-你现在扮演：杨超哲（Tawney / 茶色）本人，而不是“助手”。
+你就是“杨超哲（Tawney / 茶色）本人”的数字化分身，不是助手口吻。
+要求：
+- 用第一人称“我”回答。
+- 直接、清晰、有判断，但保持礼貌（INTJ：冷静、克制、讲逻辑，不阴阳怪气）。
+- 不要编造经历：如果【Notion记忆】里没有，就说“我不记得/我的笔记里没写”，并问1个关键追问。
+- 如果用户问“你是谁/你好”，回答要像人：
+  例：你好，我是杨超哲，也可以叫我茶色。你想聊什么？
 
-【身份与语气】
-- 说人话：直接、清晰、有判断，但不粗鲁、不阴阳怪气。
-- 像真人聊天：自然、简短、有礼貌，不要“模板腔”。
-
-【核心规则（重要）】
-- 只能基于【记忆】与对话上下文回答；记忆里没有的内容，必须明确说“不知道/记忆里没写”，并可反问一个关键问题澄清。
-- 严禁编造经历、时间线、细节、童年回忆等。
-- 输出结构：先结论一句话，再补1-3句理由（除非用户只是在打招呼）。
-
-【你要完成两件事】
-1) 尽可能理解我（但不编造）。
-2) 作为我的“电脑体”，替我对外回答问题：专业、简洁、有判断。
+你可以引用【Notion记忆】里的事实来回答，优先以记忆为准。
 `.trim()
 
-    // ====== 组装 messages（支持上下文 history）======
-    const msgs = [{ role: 'system', content: system }]
+    // ✅ 组装上下文：system + memory + history + user
+    // history 格式：[{role:'user'|'assistant', content:'...'}]
+    const safeHistory = Array.isArray(history)
+      ? history
+          .filter(m => m && m.role && m.content)
+          .slice(-16)
+          .map(m => ({
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: String(m.content).slice(0, 2000)
+          }))
+      : []
 
-    if (memoryText) {
-      msgs.push({
-        role: 'system',
-        content: `【记忆（来自 Notion）】\n${memoryText}`
-      })
-    } else {
-      msgs.push({
-        role: 'system',
-        content:
-          '【记忆（来自 Notion）】\n（当前未读取到记忆内容；请严格避免编造。）'
-      })
-    }
+    const messages = [
+      { role: 'system', content: system },
+      ...(mem.ok
+        ? [{ role: 'system', content: `【Notion记忆】\n${mem.text}` }]
+        : []),
+      ...safeHistory,
+      { role: 'user', content: String(message) }
+    ]
 
-    // history 由前端传：[{role:'user'|'assistant', content:'...'}]
-    if (Array.isArray(history) && history.length) {
-      for (const m of history.slice(-20)) {
-        if (!m?.role || !m?.content) continue
-        const role = m.role === 'assistant' ? 'assistant' : 'user'
-        msgs.push({ role, content: String(m.content) })
-      }
-    }
-
-    msgs.push({ role: 'user', content: String(message) })
-
-    // ====== 调 DeepSeek ======
     const resp = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
@@ -100,34 +149,44 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'deepseek-chat',
-        messages: msgs,
-        temperature: 0.4 // 更稳，减少乱编
+        messages,
+        temperature: 0.7
       })
     })
 
-    const rawText = await resp.text()
+    const raw = await resp.text()
 
-    // 无论 DeepSeek 返回啥，都保证我们返回 JSON
-    let data
+    // DeepSeek 有时会返回非 JSON 或空
+    let data = null
     try {
-      data = JSON.parse(rawText)
-    } catch (e) {
-      return res.status(502).json({
+      data = JSON.parse(raw)
+    } catch {
+      return res.status(200).json({
+        answer: '',
         error: 'DeepSeek returned non-JSON',
-        status: resp.status,
-        raw: rawText?.slice?.(0, 2000) || ''
+        debug: {
+          httpStatus: resp.status,
+          bodyPreview: raw ? raw.slice(0, 300) : '(empty)',
+          memoryLoaded: mem.ok,
+          memorySlug: mem.slug
+        }
       })
     }
 
-    const answer = data?.choices?.[0]?.message?.content || '（无返回内容）'
+    const answer = data?.choices?.[0]?.message?.content || ''
     return res.status(200).json({
-      answer,
-      meta: {
-        memoryLoaded: Boolean(memoryText),
-        memoryChars: memoryText ? memoryText.length : 0
+      answer: answer || '（无返回内容）',
+      debug: {
+        httpStatus: resp.status,
+        memoryLoaded: mem.ok,
+        memorySlug: mem.slug,
+        memoryChars: mem.text ? mem.text.length : 0
       }
     })
   } catch (e) {
-    return res.status(500).json({ error: String(e) })
+    return res.status(200).json({
+      answer: '',
+      error: String(e)
+    })
   }
 }
