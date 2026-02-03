@@ -1,67 +1,97 @@
+// pages/api/deepseek-chat.js
+
+import getNotionPost from '../../lib/notion/getNotionPost'
+import getPageContentText from '../../lib/notion/getPageContentText'
+
 export default async function handler(req, res) {
-  // 永远返回 JSON（避免你前端 JSON.parse 炸）
-  res.setHeader('Content-Type', 'application/json; charset=utf-8')
+  // ====== CORS + 预检（解决 405）======
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 
-  // 允许 GET 用来健康检查（避免 405 空 body）
-  if (req.method === 'GET') {
-    return res.status(200).json({ ok: true })
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end('')
   }
-
   if (req.method !== 'POST') {
-    return res.status(200).json({
-      ok: false,
-      error: `Method ${req.method} Not Allowed (use POST)`
-    })
+    return res.status(405).json({ error: 'Method Not Allowed' })
   }
 
   try {
     const apiKey = process.env.DEEPSEEK_API_KEY
     if (!apiKey) {
-      return res.status(200).json({ ok: false, error: 'Missing DEEPSEEK_API_KEY' })
+      return res.status(500).json({ error: 'Missing DEEPSEEK_API_KEY' })
     }
 
-    const body = req.body || {}
-    const memorySlugs = Array.isArray(body.memorySlugs) ? body.memorySlugs : ['memory', 'memory-core', 'memroy']
-    const incoming = Array.isArray(body.messages) ? body.messages : []
-    const lastUser = (body.message || '').trim()
-
-    // 兼容两种入参：messages（推荐）或 message（单轮）
-    let chat = []
-    if (incoming.length > 0) {
-      chat = incoming
-        .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-        .slice(-24) // 控制长度
-    } else if (lastUser) {
-      chat = [{ role: 'user', content: lastUser }]
+    const { message, history } = req.body || {}
+    if (!message || !String(message).trim()) {
+      return res.status(400).json({ error: 'Missing message' })
     }
 
-    if (chat.length === 0) {
-      return res.status(200).json({ ok: false, error: 'Missing message/messages' })
+    // ====== 从 Notion 读取记忆（用 pageId 最稳）======
+    const memoryPageId = process.env.MEMORY_PAGE_ID // 例如：d7e96987-c91f-409f-8df5-0a8ff8c7e7a7
+    let memoryText = ''
+
+    if (memoryPageId) {
+      try {
+        const memoryPost = await getNotionPost(memoryPageId)
+        // getPageContentText 一般接受 blockMap；如果你这仓库实现不同，也不会影响整体（下面兜底）
+        if (memoryPost?.blockMap) {
+          const bodyText = await getPageContentText(memoryPost.blockMap)
+          memoryText = `${memoryPost?.title || '记忆'}\n\n${bodyText || ''}`.trim()
+        } else {
+          memoryText = `${memoryPost?.title || ''}\n${memoryPost?.summary || ''}`.trim()
+        }
+      } catch (e) {
+        memoryText = ''
+      }
     }
 
-    // 1) 从你的站点抓“记忆页”的 HTML，再粗暴转成纯文本
-    const origin =
-      (req.headers['x-forwarded-proto'] ? `${req.headers['x-forwarded-proto']}://` : 'https://') +
-      (req.headers['x-forwarded-host'] || req.headers.host)
-
-    const memoryText = await fetchMemoryFromSite(origin, memorySlugs)
-
-    // 2) System Prompt：INTJ：直接但礼貌；不许编造；以记忆为准
+    // ====== 系统提示词：拟人化 + INTJ 直接但有礼貌 + 禁止编造 ======
     const system = `
-你是“杨超哲（Tawney / 茶色）”本人在互联网上的数字化分身。
-风格：INTJ，直接、高效、有判断，但保持基本礼貌，不阴阳怪气、不攻击、不装腔。
-规则：
-1) 只基于【记忆】与对话上下文回答；没有依据就明确说“我不确定/我不知道”，并提出你需要的关键补充信息。
-2) 严禁编造任何“个人经历/童年回忆/具体事件”。除非【记忆】明确写了。
-3) 回答结构：先结论，再理由；能短就短，讲重点和逻辑。
+你现在扮演：杨超哲（Tawney / 茶色）本人，而不是“助手”。
+
+【身份与语气】
+- 说人话：直接、清晰、有判断，但不粗鲁、不阴阳怪气。
+- 像真人聊天：自然、简短、有礼貌，不要“模板腔”。
+
+【核心规则（重要）】
+- 只能基于【记忆】与对话上下文回答；记忆里没有的内容，必须明确说“不知道/记忆里没写”，并可反问一个关键问题澄清。
+- 严禁编造经历、时间线、细节、童年回忆等。
+- 输出结构：先结论一句话，再补1-3句理由（除非用户只是在打招呼）。
+
+【你要完成两件事】
+1) 尽可能理解我（但不编造）。
+2) 作为我的“电脑体”，替我对外回答问题：专业、简洁、有判断。
 `.trim()
 
-    const messages = [
-      { role: 'system', content: system },
-      ...(memoryText ? [{ role: 'system', content: `【记忆】\n${memoryText}` }] : []),
-      ...chat
-    ]
+    // ====== 组装 messages（支持上下文 history）======
+    const msgs = [{ role: 'system', content: system }]
 
+    if (memoryText) {
+      msgs.push({
+        role: 'system',
+        content: `【记忆（来自 Notion）】\n${memoryText}`
+      })
+    } else {
+      msgs.push({
+        role: 'system',
+        content:
+          '【记忆（来自 Notion）】\n（当前未读取到记忆内容；请严格避免编造。）'
+      })
+    }
+
+    // history 由前端传：[{role:'user'|'assistant', content:'...'}]
+    if (Array.isArray(history) && history.length) {
+      for (const m of history.slice(-20)) {
+        if (!m?.role || !m?.content) continue
+        const role = m.role === 'assistant' ? 'assistant' : 'user'
+        msgs.push({ role, content: String(m.content) })
+      }
+    }
+
+    msgs.push({ role: 'user', content: String(message) })
+
+    // ====== 调 DeepSeek ======
     const resp = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
@@ -70,80 +100,34 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'deepseek-chat',
-        temperature: 0.2,
-        messages
+        messages: msgs,
+        temperature: 0.4 // 更稳，减少乱编
       })
     })
 
-    const text = await resp.text()
+    const rawText = await resp.text()
 
-    // DeepSeek 偶尔返回非 JSON：这里也保证我们回 JSON
-    let data = null
+    // 无论 DeepSeek 返回啥，都保证我们返回 JSON
+    let data
     try {
-      data = text ? JSON.parse(text) : null
+      data = JSON.parse(rawText)
     } catch (e) {
-      return res.status(200).json({
-        ok: false,
+      return res.status(502).json({
         error: 'DeepSeek returned non-JSON',
-        httpStatus: resp.status,
-        raw: text || ''
+        status: resp.status,
+        raw: rawText?.slice?.(0, 2000) || ''
       })
     }
 
-    const answer =
-      data?.choices?.[0]?.message?.content ||
-      data?.choices?.[0]?.text ||
-      '（无返回内容）'
-
+    const answer = data?.choices?.[0]?.message?.content || '（无返回内容）'
     return res.status(200).json({
-      ok: true,
-      answer
+      answer,
+      meta: {
+        memoryLoaded: Boolean(memoryText),
+        memoryChars: memoryText ? memoryText.length : 0
+      }
     })
   } catch (e) {
-    return res.status(200).json({ ok: false, error: String(e) })
+    return res.status(500).json({ error: String(e) })
   }
-}
-
-// 抓取你站点的 /memory 或 /memory-core 页面，然后转成文本
-async function fetchMemoryFromSite(origin, slugs) {
-  for (const slug of slugs) {
-    try {
-      const url = `${origin.replace(/\/$/, '')}/${slug.replace(/^\//, '')}`
-      const r = await fetch(url, {
-        method: 'GET',
-        headers: { 'User-Agent': 'memory-bot' }
-      })
-      if (!r.ok) continue
-      const html = await r.text()
-      const text = htmlToText(html)
-
-      // 有内容才算成功
-      const cleaned = (text || '').trim()
-      if (cleaned.length > 50) {
-        // 控制 token：最多 8k 字左右（你后面要更大再说）
-        return cleaned.slice(0, 8000)
-      }
-    } catch (e) {}
-  }
-  return ''
-}
-
-function htmlToText(html) {
-  if (!html) return ''
-  // 去掉 script/style
-  let s = html.replace(/<script[\s\S]*?<\/script>/gi, '')
-  s = s.replace(/<style[\s\S]*?<\/style>/gi, '')
-  // 把 <br> / </p> / </div> 变成换行
-  s = s.replace(/<br\s*\/?>/gi, '\n')
-  s = s.replace(/<\/p>/gi, '\n')
-  s = s.replace(/<\/div>/gi, '\n')
-  // 去标签
-  s = s.replace(/<[^>]+>/g, '')
-  // 解一点常见实体
-  s = s.replace(/&nbsp;/g, ' ')
-  s = s.replace(/&amp;/g, '&')
-  s = s.replace(/&lt;/g, '<')
-  s = s.replace(/&gt;/g, '>')
-  s = s.replace(/\n{3,}/g, '\n\n')
-  return s
 }
