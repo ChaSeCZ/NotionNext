@@ -5,17 +5,19 @@ import { idToUuid } from 'notion-utils'
 import BLOG from './blog.config'
 
 /**
+ * ✅ 关键：放行 deepseek-chat API（否则 POST/OPTIONS 可能被拦成 405 空响应）
+ */
+function isDeepseekChatApi(pathname: string) {
+  return pathname === '/api/deepseek-chat' || pathname.startsWith('/api/deepseek-chat/')
+}
+
+/**
  * Clerk 身份验证中间件
  */
 export const config = {
   // 这里设置白名单，防止静态资源被拦截
   matcher: ['/((?!.*\\..*|_next|/sign-in|/auth).*)', '/', '/(api|trpc)(.*)']
 }
-
-// ✅ 放行这些 API（不走任何鉴权/重定向/UUID redirect）
-const isPublicApi = createRouteMatcher([
-  '/api/deepseek-chat(.*)'
-])
 
 // 限制登录访问的路由
 const isTenantRoute = createRouteMatcher([
@@ -36,8 +38,8 @@ const isTenantAdminRoute = createRouteMatcher([
  */
 // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
 const noAuthMiddleware = async (req: NextRequest, ev: any) => {
-  // ✅ 关键：API 直接放行
-  if (isPublicApi(req)) {
+  // ✅ 放行 deepseek-chat
+  if (isDeepseekChatApi(req.nextUrl.pathname)) {
     return NextResponse.next()
   }
 
@@ -73,8 +75,8 @@ const noAuthMiddleware = async (req: NextRequest, ev: any) => {
  */
 const authMiddleware = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
   ? clerkMiddleware((auth, req) => {
-      // ✅ 关键：API 直接放行
-      if (isPublicApi(req)) {
+      // ✅ 放行 deepseek-chat（不走任何鉴权/重定向/保护逻辑）
+      if (isDeepseekChatApi(req.nextUrl.pathname)) {
         return NextResponse.next()
       }
 
