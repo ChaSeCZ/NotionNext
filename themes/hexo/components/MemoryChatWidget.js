@@ -1,159 +1,76 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useRef, useState } from 'react'
 
 export default function MemoryChatWidget() {
-  const [mounted, setMounted] = useState(false)
   const [open, setOpen] = useState(false)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
 
   // 连续上下文
-  const [messages, setMessages] = useState([]) // [{role:'user'|'assistant', content:string}]
+  const [chat, setChat] = useState([]) // [{role:'user'|'assistant', content:string}]
 
-  // 拖动位置（持久化）
-  const defaultPos = useMemo(() => {
-    try {
-      const s = localStorage.getItem('memory_chat_pos')
-      if (s) return JSON.parse(s)
-    } catch {}
-    return { x: null, y: null }
-  }, [])
-  const [pos, setPos] = useState(defaultPos)
+  // 拖动
+  const [pos, setPos] = useState({ x: 18, y: 64 })
+  const dragging = useRef(false)
+  const dragStart = useRef({ x: 0, y: 0 })
+  const posStart = useRef({ x: 0, y: 0 })
 
-  const draggingRef = useRef(false)
-  const dragOffsetRef = useRef({ dx: 0, dy: 0 })
-  const panelRef = useRef(null)
-
-  useEffect(() => setMounted(true), [])
-
-  // esc 关闭
-  useEffect(() => {
-    const onKey = e => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
-  // 保存位置
-  useEffect(() => {
-    if (!mounted) return
-    try {
-      localStorage.setItem('memory_chat_pos', JSON.stringify(pos))
-    } catch {}
-  }, [pos, mounted])
-
-  function onPointerDown(e) {
-    draggingRef.current = true
-    const panel = panelRef.current
-    if (!panel) return
-    const rect = panel.getBoundingClientRect()
-    dragOffsetRef.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top }
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId)
-    } catch {}
-  }
-  function onPointerMove(e) {
-    if (!draggingRef.current) return
-    const panel = panelRef.current
-    if (!panel) return
-
-    const w = window.innerWidth
-    const h = window.innerHeight
-    const rect = panel.getBoundingClientRect()
-
-    let x = e.clientX - dragOffsetRef.current.dx
-    let y = e.clientY - dragOffsetRef.current.dy
-
-    x = Math.max(8, Math.min(x, w - rect.width - 8))
-    y = Math.max(8, Math.min(y, h - rect.height - 8))
-
-    setPos({ x, y })
-  }
-  function onPointerUp() {
-    draggingRef.current = false
-  }
-
-  async function readBodyAlways(res) {
-    // 一律先读 text，再尝试 json
-    const text = await res.text()
-    if (!text) {
-      return { ok: false, empty: true, raw: '', status: res.status, statusText: res.statusText }
-    }
-    try {
-      return { ok: true, json: JSON.parse(text), raw: text, status: res.status, statusText: res.statusText }
-    } catch {
-      return { ok: false, empty: false, raw: text, status: res.status, statusText: res.statusText }
-    }
-  }
+  // 你也可以不传 memory，让后端只读 Notion 的记忆
+  // 这里留空，避免“你写了的固定记忆”覆盖 Notion 记忆
+  const memoryText = ''
 
   async function send() {
-    const content = input.trim()
-    if (!content || loading) return
+    const q = input.trim()
+    if (!q || loading) return
 
-    setLoading(true)
+    const nextChat = [...chat, { role: 'user', content: q }]
+    setChat(nextChat)
     setInput('')
-
-    const nextMsgs = [...messages, { role: 'user', content }]
-    setMessages(nextMsgs)
+    setLoading(true)
 
     try {
-      const res = await fetch('/api/deepseek-chat', {
+      const payload = {
+        messages: nextChat.map(m => ({ role: m.role, content: m.content })),
+        memory: memoryText
+      }
+
+      const r = await fetch('/api/deepseek-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: nextMsgs })
+        body: JSON.stringify(payload)
       })
 
-      const parsed = await readBodyAlways(res)
+      const txt = await r.text()
 
-      // 任何非 JSON/空响应：直接把状态码+原文打印出来
-      if (!parsed.ok) {
-        const rawText =
-          parsed.empty
-            ? '（空响应 body=""）'
-            : String(parsed.raw).slice(0, 3000)
-
-        setMessages(m => [
-          ...m,
-          {
-            role: 'assistant',
-            content:
-              `【错误】API返回不是JSON\n` +
-              `HTTP ${parsed.status} ${parsed.statusText}\n` +
-              rawText
-          }
-        ])
-        return
+      let data
+      try {
+        data = JSON.parse(txt)
+      } catch {
+        throw new Error(`API返回不是JSON\nHTTP ${r.status}\n(body=${txt || '""'})`)
       }
 
-      // JSON 但非 2xx
-      if (!res.ok) {
-        setMessages(m => [
-          ...m,
-          {
-            role: 'assistant',
-            content:
-              `【错误】HTTP ${parsed.status} ${parsed.statusText}\n` +
-              (parsed.json?.error ? String(parsed.json.error) : JSON.stringify(parsed.json))
-          }
-        ])
-        return
+      // 你要确认有没有读到 Notion 记忆：看这里
+      // 打开浏览器 console 会看到 memoryMeta
+      if (data?.memoryMeta) {
+        console.log('[memoryMeta]', data.memoryMeta)
       }
 
-      const answer = parsed.json?.answer || '（无返回内容）'
-      setMessages(m => [...m, { role: 'assistant', content: answer }])
+      if (!r.ok) {
+        throw new Error(data?.error || `HTTP ${r.status}`)
+      }
+
+      const a = (data?.answer || '').trim()
+      setChat(cur => [...cur, { role: 'assistant', content: a || '（无返回内容）' }])
     } catch (e) {
-      setMessages(m => [...m, { role: 'assistant', content: `【错误】${String(e)}` }])
+      setChat(cur => [
+        ...cur,
+        { role: 'assistant', content: `【错误】${String(e.message || e)}` }
+      ])
     } finally {
       setLoading(false)
     }
   }
 
-  function clearAll() {
-    setMessages([])
-    setInput('')
-  }
-
+  // Ctrl/Cmd+Enter 发送
   function onKeyDown(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
@@ -161,87 +78,136 @@ export default function MemoryChatWidget() {
     }
   }
 
-  const panelStyle = {
-    position: 'fixed',
-    right: pos.x == null ? 18 : 'auto',
-    bottom: pos.y == null ? 72 : 'auto',
-    left: pos.x != null ? pos.x : 'auto',
-    top: pos.y != null ? pos.y : 'auto',
+  // Esc 关闭
+  useEffect(() => {
+    const onEsc = e => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('keydown', onEsc)
+    return () => window.removeEventListener('keydown', onEsc)
+  }, [])
 
-    width: 420,
-    maxWidth: 'calc(100vw - 24px)',
-    height: 560,
-    maxHeight: 'calc(100vh - 24px)',
-
-    zIndex: 2147483647,
-    background: '#fff',
-    borderRadius: 14,
-    boxShadow: '0 18px 50px rgba(0,0,0,0.22)',
-    border: '1px solid rgba(0,0,0,0.10)',
-    overflow: 'hidden',
-    display: 'flex',
-    flexDirection: 'column'
+  // 拖动：标题栏按下
+  function onDragStart(e) {
+    dragging.current = true
+    dragStart.current = { x: e.clientX, y: e.clientY }
+    posStart.current = { ...pos }
   }
 
-  const btnStyle = {
-    position: 'fixed',
-    right: 18,
-    bottom: 18,
-    zIndex: 2147483647,
-    borderRadius: 999,
-    padding: '10px 14px',
-    background: 'rgba(0,0,0,0.70)',
-    color: '#fff',
-    border: '1px solid rgba(255,255,255,0.25)',
-    cursor: 'pointer'
-  }
+  // 拖动：全局移动
+  useEffect(() => {
+    function onMove(e) {
+      if (!dragging.current) return
+      const dx = e.clientX - dragStart.current.x
+      const dy = e.clientY - dragStart.current.y
+      setPos({
+        x: Math.max(8, posStart.current.x + dx),
+        y: Math.max(8, posStart.current.y + dy)
+      })
+    }
+    function onUp() {
+      dragging.current = false
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [pos])
 
-  const ui = (
+  return (
     <>
-      <button onClick={() => setOpen(v => !v)} style={btnStyle}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        style={{
+          position: 'fixed',
+          right: 18,
+          bottom: 18,
+          zIndex: 2147483647,
+          borderRadius: 999,
+          padding: '10px 14px',
+          background: 'rgba(0,0,0,0.6)',
+          color: '#fff',
+          border: '1px solid rgba(255,255,255,0.25)',
+          cursor: 'pointer'
+        }}
+      >
         {open ? '关闭' : '问问茶色'}
       </button>
 
       {open && (
-        <div ref={panelRef} style={panelStyle}>
+        <div
+          style={{
+            position: 'fixed',
+            left: pos.x,
+            top: pos.y,
+            width: 520,
+            maxWidth: 'calc(100vw - 16px)',
+            height: 560,
+            maxHeight: 'calc(100vh - 16px)',
+            zIndex: 2147483647,
+            background: '#fff',
+            borderRadius: 16,
+            boxShadow: '0 18px 50px rgba(0,0,0,0.22)',
+            border: '1px solid rgba(0,0,0,0.08)',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column'
+          }}
+        >
           <div
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
+            onMouseDown={onDragStart}
             style={{
-              padding: '10px 12px',
+              padding: '12px 14px',
               fontWeight: 800,
               borderBottom: '1px solid rgba(0,0,0,0.08)',
-              cursor: 'grab',
-              userSelect: 'none',
-              background: '#fff'
+              cursor: 'move',
+              userSelect: 'none'
             }}
           >
             我正在狠狠回答
-            <span style={{ fontWeight: 500, marginLeft: 8, fontSize: 12, opacity: 0.6 }}>
+            <span style={{ fontWeight: 500, opacity: 0.6, marginLeft: 10, fontSize: 12 }}>
               （拖动这里移动；Ctrl/Cmd+Enter 发送）
             </span>
           </div>
 
-          <div style={{ padding: 12, overflow: 'auto', flex: 1, background: '#fafafa' }}>
-            {messages.map((m, idx) => {
-              const isUser = m.role === 'user'
+          <div
+            style={{
+              padding: 14,
+              flex: 1,
+              overflow: 'auto',
+              background: '#fafafa'
+            }}
+          >
+            {chat.length === 0 && (
+              <div style={{ opacity: 0.6, fontSize: 14 }}>
+                输入问题开始对话（会保留上下文）
+              </div>
+            )}
+
+            {chat.map((m, idx) => {
+              const isMe = m.role === 'user'
               return (
                 <div
                   key={idx}
-                  style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start', marginTop: 10 }}
+                  style={{
+                    display: 'flex',
+                    justifyContent: isMe ? 'flex-end' : 'flex-start',
+                    marginBottom: 10
+                  }}
                 >
                   <div
                     style={{
-                      maxWidth: '80%',
+                      maxWidth: '78%',
                       padding: '10px 12px',
                       borderRadius: 14,
                       whiteSpace: 'pre-wrap',
-                      lineHeight: 1.55,
-                      fontSize: 14,
-                      background: isUser ? '#111827' : '#fff',
-                      color: isUser ? '#fff' : '#111',
-                      border: isUser ? 'none' : '1px solid rgba(0,0,0,0.08)'
+                      lineHeight: 1.5,
+                      background: isMe ? '#111827' : '#fff',
+                      color: isMe ? '#fff' : '#111',
+                      border: isMe ? 'none' : '1px solid rgba(0,0,0,0.10)',
+                      boxShadow: isMe ? 'none' : '0 4px 16px rgba(0,0,0,0.06)'
                     }}
                   >
                     {m.content}
@@ -250,10 +216,10 @@ export default function MemoryChatWidget() {
               )
             })}
 
-            {loading && <div style={{ marginTop: 10, opacity: 0.7, fontSize: 13 }}>思考中…</div>}
+            {loading && <div style={{ opacity: 0.7, fontSize: 14 }}>思考中…</div>}
           </div>
 
-          <div style={{ padding: 10, borderTop: '1px solid rgba(0,0,0,0.08)', background: '#fff' }}>
+          <div style={{ padding: 14, borderTop: '1px solid rgba(0,0,0,0.08)' }}>
             <textarea
               value={input}
               onChange={e => setInput(e.target.value)}
@@ -261,23 +227,24 @@ export default function MemoryChatWidget() {
               placeholder="输入问题…（Ctrl/Cmd+Enter 发送）"
               style={{
                 width: '100%',
-                height: 80,
+                height: 84,
                 resize: 'none',
-                borderRadius: 10,
+                borderRadius: 12,
                 border: '1px solid rgba(0,0,0,0.12)',
-                padding: 10,
-                outline: 'none'
+                padding: 12,
+                outline: 'none',
+                background: '#fff'
               }}
             />
 
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
               <button
                 onClick={send}
                 disabled={loading}
                 style={{
                   flex: 1,
-                  borderRadius: 10,
-                  padding: '10px 12px',
+                  borderRadius: 12,
+                  padding: '12px 14px',
                   background: '#111827',
                   color: '#fff',
                   border: 'none',
@@ -289,10 +256,10 @@ export default function MemoryChatWidget() {
               </button>
 
               <button
-                onClick={clearAll}
+                onClick={() => setChat([])}
                 style={{
-                  borderRadius: 10,
-                  padding: '10px 12px',
+                  borderRadius: 12,
+                  padding: '12px 14px',
                   background: '#fff',
                   border: '1px solid rgba(0,0,0,0.15)',
                   cursor: 'pointer'
@@ -306,7 +273,4 @@ export default function MemoryChatWidget() {
       )}
     </>
   )
-
-  if (!mounted) return null
-  return createPortal(ui, document.body)
 }
