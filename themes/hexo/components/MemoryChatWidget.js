@@ -1,28 +1,34 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export default function MemoryChatWidget() {
+  const [mounted, setMounted] = useState(false)
   const [open, setOpen] = useState(false)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // 对话上下文（连续）
+  // ✅ 拟人化 + 礼貌开场（不吃火药）
   const [messages, setMessages] = useState([
-    { role: 'assistant', content: '你好，我是杨超哲。直接说事。' }
+    {
+      role: 'assistant',
+      content: '你好，我是杨超哲，也可以叫我茶色。有什么我可以帮你？'
+    }
   ])
 
-  // 可拖动位置
-  const [pos, setPos] = useState({ x: 18, y: 64 })
+  // ✅ 可拖动位置（默认放右上更顺眼，你也能拖）
+  const [pos, setPos] = useState({ x: 32, y: 24 })
   const draggingRef = useRef(false)
   const dragStartRef = useRef({ mx: 0, my: 0, x: 0, y: 0 })
 
-  // 永远在最上层 + 不被页面布局影响
-  const zIndex = 999999
+  // ✅ 永远置顶：用最大 z-index
+  const zIndex = 2147483647
 
   const memorySlugs = useMemo(() => {
-    // 你 Notion 里可能叫 memory / memory-core / memroy（你自己拼写也说过会乱）
-    // 这里一次性都试：谁能读到就用谁
+    // 你 Notion 里名字可能乱（memory / memory-core / memroy）
     return ['memory', 'memory-core', 'memroy']
   }, [])
+
+  useEffect(() => setMounted(true), [])
 
   async function send() {
     const text = input.trim()
@@ -45,7 +51,7 @@ export default function MemoryChatWidget() {
 
       const raw = await resp.text()
 
-      // 后端必须返回 JSON；这里做容错显示，避免你看到“Unexpected end of JSON”
+      // ✅ 容错：永远不让前端 JSON.parse 崩
       let data = null
       try {
         data = raw ? JSON.parse(raw) : null
@@ -53,7 +59,7 @@ export default function MemoryChatWidget() {
         data = null
       }
 
-      if (!resp.ok) {
+      if (!resp.ok || (data && data.ok === false)) {
         const errMsg =
           (data && (data.error || data.message)) ||
           `HTTP ${resp.status}\n(body="${raw || ''}")`
@@ -80,7 +86,7 @@ export default function MemoryChatWidget() {
     }
   }
 
-  // Ctrl/Cmd+Enter 发送
+  // Ctrl/Cmd+Enter 发送；Esc 关闭
   function onKeyDown(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
@@ -97,12 +103,13 @@ export default function MemoryChatWidget() {
     if (el) el.scrollTop = el.scrollHeight
   }, [messages, open])
 
-  // 拖动：只允许拖 header
+  // 只拖 header
   function onMouseDownHeader(e) {
     draggingRef.current = true
     dragStartRef.current = { mx: e.clientX, my: e.clientY, x: pos.x, y: pos.y }
     e.preventDefault()
   }
+
   useEffect(() => {
     function onMove(e) {
       if (!draggingRef.current) return
@@ -124,9 +131,12 @@ export default function MemoryChatWidget() {
     }
   }, [pos.x, pos.y])
 
-  // 右下角按钮
-  return (
+  // ✅ Portal：把按钮+弹窗渲染到 body，彻底摆脱主题层级压制
+  if (!mounted) return null
+
+  return createPortal(
     <>
+      {/* 右下角按钮 */}
       <button
         onClick={() => setOpen(v => !v)}
         style={{
@@ -136,7 +146,7 @@ export default function MemoryChatWidget() {
           zIndex,
           borderRadius: 999,
           padding: '10px 14px',
-          background: 'rgba(0,0,0,0.75)',
+          background: 'rgba(0,0,0,0.78)',
           color: '#fff',
           border: '1px solid rgba(255,255,255,0.25)',
           cursor: 'pointer'
@@ -163,7 +173,8 @@ export default function MemoryChatWidget() {
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
-            // 关键：避免被父级 transform/stacking context 压住
+
+            // ✅ 再加一层保险：强制建立自己的层叠上下文
             isolation: 'isolate'
           }}
         >
@@ -272,7 +283,15 @@ export default function MemoryChatWidget() {
               </button>
 
               <button
-                onClick={() => setMessages([{ role: 'assistant', content: '你好，我是杨超哲。直接说事。' }])}
+                onClick={() =>
+                  setMessages([
+                    {
+                      role: 'assistant',
+                      content:
+                        '你好，我是杨超哲，也可以叫我茶色。有什么我可以帮你？'
+                    }
+                  ])
+                }
                 style={{
                   borderRadius: 14,
                   padding: '12px 14px',
@@ -288,6 +307,7 @@ export default function MemoryChatWidget() {
           </div>
         </div>
       )}
-    </>
+    </>,
+    document.body
   )
 }
