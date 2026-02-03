@@ -2,15 +2,9 @@
 
 const path = require('path')
 
-// ✅ 用明确文件路径导入（避免 “Can't resolve ../../lib/notion”）
-const notionPostModule = require(path.join(
-  process.cwd(),
-  'lib/notion/getNotionPost.js'
-))
-const notionTextModule = require(path.join(
-  process.cwd(),
-  'lib/notion/getPageContentText.js'
-))
+// ✅ 直接用绝对路径 require，避免你之前那种 @/lib/notion / ../../lib/notion 全部炸掉的问题
+const notionPostModule = require(path.join(process.cwd(), 'lib/notion/getNotionPost.js'))
+const notionTextModule = require(path.join(process.cwd(), 'lib/notion/getPageContentText.js'))
 
 const getPostBySlug =
   notionPostModule.getPostBySlug ||
@@ -22,19 +16,22 @@ const getPageContentText =
   notionTextModule.default ||
   notionTextModule
 
-function clampText(s, max = 12000) {
+const VERSION = 'deepseek-chat-api-2026-02-03-v1'
+
+function clampText(s, max = 14000) {
   if (!s) return ''
   const t = String(s)
   return t.length > max ? t.slice(0, max) + '\n…（已截断）' : t
 }
 
-// 尝试多个 slug，避免你 Notion 里拼写不一致导致“读不到”
 async function loadMemoryFromNotion() {
+  // ✅ 这里写死优先读 memory（你 Notion 的 slug 最好就叫 memory）
+  // 如果你坚持用 memroy，也会尝试读到
   const candidates = [
-    process.env.MEMORY_SLUG,
+    process.env.MEMORY_SLUG, // 可选：Vercel 环境变量 MEMORY_SLUG=memory
     'memory',
-    'memory-core',
     'memroy',
+    'memory-core',
     'memort'
   ].filter(Boolean)
 
@@ -43,8 +40,8 @@ async function loadMemoryFromNotion() {
       const page = await getPostBySlug(slug)
       if (!page || !page.blockMap) continue
 
-      // ✅ 读正文文本（不是只读 summary）
       const bodyText = await getPageContentText(page.blockMap)
+
       const title = page?.title ? String(page.title) : ''
       const summary = page?.summary ? String(page.summary) : ''
 
@@ -55,27 +52,28 @@ async function loadMemoryFromNotion() {
 【正文】
 ${bodyText || ''}`
 
-      const finalText = clampText(merged, 14000)
-      return { ok: true, slug, text: finalText }
+      return { ok: true, slug, text: clampText(merged) }
     } catch (e) {
-      // 尝试下一个 slug
+      // 继续尝试下一个 slug
     }
   }
+
   return { ok: false, slug: null, text: '' }
 }
 
 export default async function handler(req, res) {
-  // 永远返回 JSON（避免前端 .json() 报错）
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   res.setHeader('Cache-Control', 'no-store')
 
-  // ✅ 允许 POST / GET（避免你再看到 405）
   const method = (req.method || '').toUpperCase()
+
+  // ✅ 允许 GET/POST，避免你再看到 405 + 空 body
   if (method !== 'POST' && method !== 'GET') {
     return res.status(200).json({
+      ok: false,
+      version: VERSION,
       answer: '',
-      error: `Method ${method} not supported. Use POST or GET.`,
-      debug: { method }
+      error: `Method ${method} not supported. Use POST or GET.`
     })
   }
 
@@ -83,45 +81,41 @@ export default async function handler(req, res) {
     const apiKey = process.env.DEEPSEEK_API_KEY
     if (!apiKey) {
       return res.status(200).json({
+        ok: false,
+        version: VERSION,
         answer: '',
-        error: 'Missing DEEPSEEK_API_KEY',
-        debug: { method }
+        error: 'Missing DEEPSEEK_API_KEY'
       })
     }
 
-    // GET 也能测：/api/deepseek-chat?message=xxx
-    const body = method === 'POST' ? req.body || {} : {}
     const message =
-      (method === 'POST' ? body.message : req.query.message) || ''
-    const history =
-      (method === 'POST' ? body.history : []) || []
+      (method === 'POST' ? (req.body || {}).message : req.query.message) || ''
+    const history = (method === 'POST' ? (req.body || {}).history : []) || []
 
     if (!String(message).trim()) {
       return res.status(200).json({
+        ok: false,
+        version: VERSION,
         answer: '',
-        error: 'Missing message',
-        debug: { method }
+        error: 'Missing message'
       })
     }
 
-    // ✅ 读取 Notion 记忆
+    // ✅ 读 Notion 记忆（正文）
     const mem = await loadMemoryFromNotion()
 
-    // ✅ 你要的“拟人 + 直接但礼貌 + 不编造”
+    // ✅ 你要的：像“你本人”，直但不失礼，不编造
     const system = `
-你就是“杨超哲（Tawney / 茶色）本人”的数字化分身，不是助手口吻。
+你就是“杨超哲（Tawney / 茶色）本人”的数字化分身，不是助理口吻。
 要求：
 - 用第一人称“我”回答。
-- 直接、清晰、有判断，但保持礼貌（INTJ：冷静、克制、讲逻辑，不阴阳怪气）。
-- 不要编造经历：如果【Notion记忆】里没有，就说“我不记得/我的笔记里没写”，并问1个关键追问。
-- 如果用户问“你是谁/你好”，回答要像人：
-  例：你好，我是杨超哲，也可以叫我茶色。你想聊什么？
-
-你可以引用【Notion记忆】里的事实来回答，优先以记忆为准。
+- 直接、清晰、有判断，但保持礼貌（INTJ：冷静克制、讲逻辑，不粗鲁）。
+- 严禁编造：如果【Notion记忆】没有写，就明确说“我不记得/笔记里没写”，并追问1个关键问题。
+- 如果用户问“你好/你是谁”，按人类口吻回答：
+  “你好，我是杨超哲，也可以叫我茶色。你想聊什么？”
+优先以【Notion记忆】为准。
 `.trim()
 
-    // ✅ 组装上下文：system + memory + history + user
-    // history 格式：[{role:'user'|'assistant', content:'...'}]
     const safeHistory = Array.isArray(history)
       ? history
           .filter(m => m && m.role && m.content)
@@ -134,9 +128,7 @@ export default async function handler(req, res) {
 
     const messages = [
       { role: 'system', content: system },
-      ...(mem.ok
-        ? [{ role: 'system', content: `【Notion记忆】\n${mem.text}` }]
-        : []),
+      ...(mem.ok ? [{ role: 'system', content: `【Notion记忆】\n${mem.text}` }] : []),
       ...safeHistory,
       { role: 'user', content: String(message) }
     ]
@@ -156,28 +148,31 @@ export default async function handler(req, res) {
 
     const raw = await resp.text()
 
-    // DeepSeek 有时会返回非 JSON 或空
-    let data = null
+    let data
     try {
       data = JSON.parse(raw)
     } catch {
       return res.status(200).json({
+        ok: false,
+        version: VERSION,
         answer: '',
         error: 'DeepSeek returned non-JSON',
         debug: {
           httpStatus: resp.status,
           bodyPreview: raw ? raw.slice(0, 300) : '(empty)',
           memoryLoaded: mem.ok,
-          memorySlug: mem.slug
+          memorySlug: mem.slug,
+          memoryChars: mem.text ? mem.text.length : 0
         }
       })
     }
 
     const answer = data?.choices?.[0]?.message?.content || ''
     return res.status(200).json({
+      ok: true,
+      version: VERSION,
       answer: answer || '（无返回内容）',
       debug: {
-        httpStatus: resp.status,
         memoryLoaded: mem.ok,
         memorySlug: mem.slug,
         memoryChars: mem.text ? mem.text.length : 0
@@ -185,6 +180,8 @@ export default async function handler(req, res) {
     })
   } catch (e) {
     return res.status(200).json({
+      ok: false,
+      version: VERSION,
       answer: '',
       error: String(e)
     })
