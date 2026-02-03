@@ -1,152 +1,205 @@
+/* themes/hexo/components/MemoryChatWidget.js */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 export default function MemoryChatWidget() {
-  const [mounted, setMounted] = useState(false)
   const [open, setOpen] = useState(false)
-  const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [mounted, setMounted] = useState(false)
 
-  // ✅ 拟人化 + 礼貌开场（不吃火药）
-  const [messages, setMessages] = useState([
+  // ✅ 对话上下文（连续）
+  const [msgs, setMsgs] = useState(() => [
     {
       role: 'assistant',
-      content: '你好，我是杨超哲，也可以叫我茶色。有什么我可以帮你？'
+      content: '你好，我是杨超哲，也可以叫我茶色。你想聊什么？'
     }
   ])
 
-  // ✅ 可拖动位置（默认放右上更顺眼，你也能拖）
-  const [pos, setPos] = useState({ x: 32, y: 24 })
-  const draggingRef = useRef(false)
-  const dragStartRef = useRef({ mx: 0, my: 0, x: 0, y: 0 })
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  // ✅ 永远置顶：用最大 z-index
-  const zIndex = 2147483647
+  // ✅ 拖动位置（可移动 + 持久化）
+  const [pos, setPos] = useState(() => {
+    try {
+      const saved = localStorage.getItem('tea_chat_pos_v1')
+      if (saved) return JSON.parse(saved)
+    } catch {}
+    return { x: 24, y: 24 } // 默认左上，避免被右侧栏遮挡
+  })
 
-  const memorySlugs = useMemo(() => {
-    // 你 Notion 里名字可能乱（memory / memory-core / memroy）
-    return ['memory', 'memory-core', 'memroy']
-  }, [])
+  const dragRef = useRef({
+    dragging: false,
+    startX: 0,
+    startY: 0,
+    baseX: 0,
+    baseY: 0
+  })
+
+  const listRef = useRef(null)
 
   useEffect(() => setMounted(true), [])
 
-  async function send() {
-    const text = input.trim()
-    if (!text || loading) return
+  // 保存位置
+  useEffect(() => {
+    if (!mounted) return
+    try {
+      localStorage.setItem('tea_chat_pos_v1', JSON.stringify(pos))
+    } catch {}
+  }, [pos, mounted])
 
-    const nextMsgs = [...messages, { role: 'user', content: text }]
-    setMessages(nextMsgs)
+  // 新消息滚到底
+  useEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [msgs, open])
+
+  // ESC 关闭
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // 拖动：mouse + touch
+  useEffect(() => {
+    function onMove(e) {
+      if (!dragRef.current.dragging) return
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY
+
+      const dx = clientX - dragRef.current.startX
+      const dy = clientY - dragRef.current.startY
+
+      // clamp 到视口
+      const nextX = Math.max(8, Math.min(window.innerWidth - 420, dragRef.current.baseX + dx))
+      const nextY = Math.max(8, Math.min(window.innerHeight - 120, dragRef.current.baseY + dy))
+      setPos({ x: nextX, y: nextY })
+    }
+
+    function onUp() {
+      dragRef.current.dragging = false
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    window.addEventListener('touchmove', onMove, { passive: false })
+    window.addEventListener('touchend', onUp)
+
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onUp)
+    }
+  }, [])
+
+  function startDrag(e) {
+    // 只允许从标题栏拖动
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY
+    dragRef.current.dragging = true
+    dragRef.current.startX = clientX
+    dragRef.current.startY = clientY
+    dragRef.current.baseX = pos.x
+    dragRef.current.baseY = pos.y
+  }
+
+  // 发送：把上下文一起带上
+  const historyForApi = useMemo(() => {
+    // 去掉第一条欢迎语也行，但留着也没事；这里保留最近 12 条
+    return msgs
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .slice(-12)
+      .map(m => ({ role: m.role, content: m.content }))
+  }, [msgs])
+
+  async function ask() {
+    const q = input.trim()
+    if (!q || loading) return
+
     setInput('')
     setLoading(true)
 
+    // 先把用户消息塞进去
+    const nextMsgs = [...msgs, { role: 'user', content: q }]
+    setMsgs(nextMsgs)
+
     try {
-      const resp = await fetch('/api/deepseek-chat', {
+      const res = await fetch('/api/deepseek-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: nextMsgs,
-          memorySlugs
+          message: q,
+          history: historyForApi
         })
       })
 
-      const raw = await resp.text()
+      const text = await res.text()
 
-      // ✅ 容错：永远不让前端 JSON.parse 崩
-      let data = null
+      let data
       try {
-        data = raw ? JSON.parse(raw) : null
-      } catch (e) {
-        data = null
-      }
-
-      if (!resp.ok || (data && data.ok === false)) {
-        const errMsg =
-          (data && (data.error || data.message)) ||
-          `HTTP ${resp.status}\n(body="${raw || ''}")`
-        setMessages(ms => [
-          ...ms,
-          { role: 'assistant', content: `【错误】${errMsg}` }
+        data = JSON.parse(text)
+      } catch {
+        setMsgs(m => [
+          ...m,
+          {
+            role: 'assistant',
+            content: `【错误】API返回不是JSON\nHTTP ${res.status}\n(body=${JSON.stringify(text || '')})`
+          }
         ])
         return
       }
 
-      const answer =
-        (data && data.answer) ||
-        (data && data.choices && data.choices[0]?.message?.content) ||
-        '（空返回）'
+      if (!data.ok) {
+        setMsgs(m => [
+          ...m,
+          {
+            role: 'assistant',
+            content:
+              `【错误】${data.error || 'unknown error'}` +
+              (data.httpStatus ? `\nDeepSeek HTTP ${data.httpStatus}` : '') +
+              (data.raw ? `\n(raw=${String(data.raw).slice(0, 600)})` : '')
+          }
+        ])
+        return
+      }
 
-      setMessages(ms => [...ms, { role: 'assistant', content: answer }])
+      setMsgs(m => [...m, { role: 'assistant', content: data.answer || '（无返回）' }])
     } catch (e) {
-      setMessages(ms => [
-        ...ms,
-        { role: 'assistant', content: `【错误】${String(e)}` }
-      ])
+      setMsgs(m => [...m, { role: 'assistant', content: `【错误】${String(e)}` }])
     } finally {
       setLoading(false)
     }
   }
 
-  // Ctrl/Cmd+Enter 发送；Esc 关闭
-  function onKeyDown(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+  function clearAll() {
+    setMsgs([{ role: 'assistant', content: '你好，我是杨超哲，也可以叫我茶色。你想聊什么？' }])
+    setInput('')
+  }
+
+  function onInputKeyDown(e) {
+    // Ctrl/Cmd + Enter 发送
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
-      send()
+      ask()
     }
-    if (e.key === 'Escape') setOpen(false)
   }
 
-  // 自动滚到底
-  const listRef = useRef(null)
-  useEffect(() => {
-    if (!open) return
-    const el = listRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [messages, open])
-
-  // 只拖 header
-  function onMouseDownHeader(e) {
-    draggingRef.current = true
-    dragStartRef.current = { mx: e.clientX, my: e.clientY, x: pos.x, y: pos.y }
-    e.preventDefault()
-  }
-
-  useEffect(() => {
-    function onMove(e) {
-      if (!draggingRef.current) return
-      const dx = e.clientX - dragStartRef.current.mx
-      const dy = e.clientY - dragStartRef.current.my
-      setPos({
-        x: Math.max(8, dragStartRef.current.x + dx),
-        y: Math.max(8, dragStartRef.current.y + dy)
-      })
-    }
-    function onUp() {
-      draggingRef.current = false
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [pos.x, pos.y])
-
-  // ✅ Portal：把按钮+弹窗渲染到 body，彻底摆脱主题层级压制
-  if (!mounted) return null
-
-  return createPortal(
+  const ui = (
     <>
-      {/* 右下角按钮 */}
+      {/* 右下角入口按钮：始终在最上层 */}
       <button
         onClick={() => setOpen(v => !v)}
         style={{
           position: 'fixed',
           right: 18,
           bottom: 18,
-          zIndex,
+          zIndex: 2147483647,
           borderRadius: 999,
           padding: '10px 14px',
-          background: 'rgba(0,0,0,0.78)',
+          background: 'rgba(0,0,0,0.65)',
           color: '#fff',
           border: '1px solid rgba(255,255,255,0.25)',
           cursor: 'pointer'
@@ -155,6 +208,7 @@ export default function MemoryChatWidget() {
         {open ? '关闭' : '问问茶色'}
       </button>
 
+      {/* 弹窗：用 portal 固定到 body，彻底解决“被卡在下面/被父层裁剪” */}
       {open && (
         <div
           style={{
@@ -165,70 +219,72 @@ export default function MemoryChatWidget() {
             maxWidth: 'calc(100vw - 16px)',
             height: 520,
             maxHeight: 'calc(100vh - 16px)',
-            zIndex,
+            zIndex: 2147483647,
             background: '#fff',
-            borderRadius: 18,
-            boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
-            border: '1px solid rgba(0,0,0,0.10)',
+            borderRadius: 16,
+            boxShadow: '0 24px 70px rgba(0,0,0,0.26)',
+            border: '1px solid rgba(0,0,0,0.08)',
             overflow: 'hidden',
             display: 'flex',
-            flexDirection: 'column',
-
-            // ✅ 再加一层保险：强制建立自己的层叠上下文
-            isolation: 'isolate'
+            flexDirection: 'column'
           }}
         >
-          {/* header：拖动区 */}
+          {/* 标题栏：拖动这里移动 */}
           <div
-            onMouseDown={onMouseDownHeader}
+            onMouseDown={startDrag}
+            onTouchStart={startDrag}
             style={{
               padding: '14px 16px',
-              fontWeight: 800,
+              fontWeight: 900,
+              fontSize: 22,
               borderBottom: '1px solid rgba(0,0,0,0.08)',
               cursor: 'move',
               userSelect: 'none',
               display: 'flex',
-              alignItems: 'baseline',
-              gap: 10
+              alignItems: 'center',
+              gap: 12
             }}
           >
-            <div style={{ fontSize: 22 }}>我正在狠狠回答</div>
-            <div style={{ fontSize: 14, opacity: 0.65 }}>
+            <span>我正在狠狠回答</span>
+            <span style={{ fontWeight: 500, fontSize: 14, opacity: 0.55 }}>
               （拖动这里移动；Ctrl/Cmd+Enter 发送）
+            </span>
+            <div style={{ marginLeft: 'auto', fontWeight: 600, fontSize: 12, opacity: 0.55 }}>
+              {loading ? '思考中…' : ''}
             </div>
           </div>
 
-          {/* messages */}
+          {/* 对话区 */}
           <div
             ref={listRef}
             style={{
               flex: 1,
-              padding: 16,
+              padding: 14,
               overflow: 'auto',
               background: '#fff'
             }}
           >
-            {messages.map((m, idx) => {
-              const isMe = m.role === 'user'
+            {msgs.map((m, idx) => {
+              const isUser = m.role === 'user'
               return (
                 <div
                   key={idx}
                   style={{
                     display: 'flex',
-                    justifyContent: isMe ? 'flex-end' : 'flex-start',
-                    marginBottom: 12
+                    justifyContent: isUser ? 'flex-end' : 'flex-start',
+                    marginBottom: 10
                   }}
                 >
                   <div
                     style={{
-                      maxWidth: '75%',
+                      maxWidth: '72%',
                       padding: '12px 14px',
-                      borderRadius: 16,
-                      lineHeight: 1.6,
+                      borderRadius: 14,
+                      lineHeight: 1.55,
                       whiteSpace: 'pre-wrap',
-                      background: isMe ? '#111827' : '#f3f4f6',
-                      color: isMe ? '#fff' : '#111',
-                      border: '1px solid rgba(0,0,0,0.06)'
+                      background: isUser ? '#0f172a' : '#f3f4f6',
+                      color: isUser ? '#fff' : '#111827',
+                      border: isUser ? 'none' : '1px solid rgba(0,0,0,0.06)'
                     }}
                   >
                     {m.content}
@@ -238,7 +294,7 @@ export default function MemoryChatWidget() {
             })}
           </div>
 
-          {/* input */}
+          {/* 输入区 */}
           <div
             style={{
               padding: 14,
@@ -249,55 +305,50 @@ export default function MemoryChatWidget() {
             <textarea
               value={input}
               onChange={e => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
+              onKeyDown={onInputKeyDown}
               placeholder="输入问题…（Ctrl/Cmd+Enter 发送）"
               style={{
                 width: '100%',
-                height: 90,
+                height: 88,
                 resize: 'none',
-                borderRadius: 14,
-                border: '1px solid rgba(0,0,0,0.14)',
+                borderRadius: 12,
+                border: '1px solid rgba(0,0,0,0.12)',
                 padding: 12,
-                outline: 'none'
+                outline: 'none',
+                fontSize: 16
               }}
             />
 
-            <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+            <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
               <button
-                onClick={send}
+                onClick={ask}
                 disabled={loading}
                 style={{
                   flex: 1,
-                  borderRadius: 14,
+                  borderRadius: 12,
                   padding: '12px 14px',
                   background: '#111827',
                   color: '#fff',
                   border: 'none',
                   cursor: loading ? 'not-allowed' : 'pointer',
                   opacity: loading ? 0.7 : 1,
-                  fontWeight: 700,
-                  fontSize: 16
+                  fontSize: 18,
+                  fontWeight: 800
                 }}
               >
-                {loading ? '思考中…' : '发送'}
+                发送
               </button>
 
               <button
-                onClick={() =>
-                  setMessages([
-                    {
-                      role: 'assistant',
-                      content:
-                        '你好，我是杨超哲，也可以叫我茶色。有什么我可以帮你？'
-                    }
-                  ])
-                }
+                onClick={clearAll}
                 style={{
-                  borderRadius: 14,
+                  width: 92,
+                  borderRadius: 12,
                   padding: '12px 14px',
                   background: '#fff',
-                  border: '1px solid rgba(0,0,0,0.18)',
+                  border: '1px solid rgba(0,0,0,0.15)',
                   cursor: 'pointer',
+                  fontSize: 16,
                   fontWeight: 700
                 }}
               >
@@ -307,7 +358,9 @@ export default function MemoryChatWidget() {
           </div>
         </div>
       )}
-    </>,
-    document.body
+    </>
   )
+
+  if (!mounted) return null
+  return createPortal(ui, document.body)
 }
