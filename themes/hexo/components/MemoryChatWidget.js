@@ -1,63 +1,47 @@
-// themes/hexo/components/MemoryChatWidget.js
-
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+
+const Z = 2147483647
 
 export default function MemoryChatWidget() {
-  const [mounted, setMounted] = useState(false)
-  const [portalEl, setPortalEl] = useState(null)
-
   const [open, setOpen] = useState(false)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // ✅ 连续对话上下文
-  const [chat, setChat] = useState([
-    {
-      role: 'assistant',
-      content: '你好，我是杨超哲，也可以叫我茶色。你想聊什么？'
-    }
+  // 聊天记录：role = 'user' | 'assistant'
+  const [msgs, setMsgs] = useState([
+    { role: 'assistant', content: '你好，我是杨超哲，也可以叫我茶色。你想聊什么？' }
   ])
 
-  // ✅ 位置（可拖动）
-  const [pos, setPos] = useState({ x: 24, y: 24 })
-  const draggingRef = useRef(false)
-  const dragOffsetRef = useRef({ x: 0, y: 0 })
+  // 位置（可拖动）
+  const boxW = 860
+  const boxH = 560
+  const [pos, setPos] = useState({ x: 0, y: 0 })
+  const dragRef = useRef({ dragging: false, sx: 0, sy: 0, ox: 0, oy: 0 })
 
-  const panelStyle = useMemo(
-    () => ({
-      position: 'fixed',
-      left: pos.x,
-      top: pos.y,
-      width: 720,
-      maxWidth: 'calc(100vw - 48px)',
-      height: 520,
-      maxHeight: 'calc(100vh - 48px)',
-      zIndex: 2147483647, // ✅ 永远最顶
-      background: '#fff',
-      borderRadius: 18,
-      boxShadow: '0 24px 80px rgba(0,0,0,0.30)',
-      border: '1px solid rgba(0,0,0,0.08)',
-      overflow: 'hidden'
-    }),
-    [pos.x, pos.y]
-  )
+  const containerRef = useRef(null)
+  const listRef = useRef(null)
 
-  // ✅ Portal：不管你把组件放在哪，最终都挂到 body 顶层
+  // 初始化放在右上角（最上面）
   useEffect(() => {
-    setMounted(true)
-    const el = document.createElement('div')
-    el.id = 'memory-chat-portal'
-    document.body.appendChild(el)
-    setPortalEl(el)
-    return () => {
-      try {
-        document.body.removeChild(el)
-      } catch {}
+    const init = () => {
+      const vw = window.innerWidth
+      const x = Math.max(12, vw - Math.min(boxW, vw - 24) - 12)
+      const y = 12
+      setPos({ x, y })
     }
+    init()
+    window.addEventListener('resize', init)
+    return () => window.removeEventListener('resize', init)
   }, [])
 
-  // esc 关闭
+  // 自动滚到底
+  useEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [msgs, open])
+
+  // ESC 关闭
   useEffect(() => {
     const onKey = e => {
       if (e.key === 'Escape') setOpen(false)
@@ -66,26 +50,22 @@ export default function MemoryChatWidget() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // ✅ 拖动逻辑：只拖标题栏
-  function onMouseDownHeader(e) {
-    draggingRef.current = true
-    dragOffsetRef.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }
-  }
+  // 拖动逻辑
   useEffect(() => {
-    function onMove(e) {
-      if (!draggingRef.current) return
-      const nx = e.clientX - dragOffsetRef.current.x
-      const ny = e.clientY - dragOffsetRef.current.y
-      const margin = 12
-      const maxX = window.innerWidth - margin
-      const maxY = window.innerHeight - margin
-      setPos({
-        x: Math.min(Math.max(nx, margin), maxX),
-        y: Math.min(Math.max(ny, margin), maxY)
-      })
+    const onMove = e => {
+      if (!dragRef.current.dragging) return
+      const dx = e.clientX - dragRef.current.sx
+      const dy = e.clientY - dragRef.current.sy
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      const w = Math.min(boxW, vw - 24)
+      const h = Math.min(boxH, vh - 24)
+      const nx = Math.min(Math.max(12, dragRef.current.ox + dx), vw - w - 12)
+      const ny = Math.min(Math.max(12, dragRef.current.oy + dy), vh - h - 12)
+      setPos({ x: nx, y: ny })
     }
-    function onUp() {
-      draggingRef.current = false
+    const onUp = () => {
+      dragRef.current.dragging = false
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -93,77 +73,56 @@ export default function MemoryChatWidget() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [pos.x, pos.y])
+  }, [])
 
-  function buildHistoryForApi(nextUserMsg) {
-    // 取最近 12 轮（user/assistant）
-    const sliced = chat.slice(-24).map(m => ({
-      role: m.role,
-      content: m.content
-    }))
-    // 最后再加本次 user
-    return [...sliced, { role: 'user', content: nextUserMsg }]
-  }
+  const apiHistory = useMemo(() => {
+    // 转成 API 需要的 {role, content}，限制长度防爆
+    return msgs
+      .slice(-16)
+      .map(m => ({ role: m.role, content: String(m.content).slice(0, 2000) }))
+  }, [msgs])
 
   async function send() {
-    const msg = String(input || '').trim()
-    if (!msg || loading) return
+    const text = input.trim()
+    if (!text || loading) return
 
-    // 先把 user 消息入栈
-    setChat(prev => [...prev, { role: 'user', content: msg }])
     setInput('')
     setLoading(true)
 
-    try {
-      const history = buildHistoryForApi(msg)
+    // 先把用户消息入栈
+    setMsgs(prev => [...prev, { role: 'user', content: text }])
 
-      const r = await fetch('/api/deepseek-chat', {
+    try {
+      const resp = await fetch('/api/deepseek-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: msg,
-          history
+          message: text,
+          history: apiHistory // ✅ 连续对话上下文
         })
       })
 
-      const text = await r.text()
+      // 任何错误也要读文本，避免 JSON 崩
+      const raw = await resp.text()
+
       let data = null
       try {
-        data = JSON.parse(text)
-      } catch {
-        setChat(prev => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: `【错误】API返回不是JSON\nHTTP ${r.status}\n(body=${JSON.stringify(
-              text
-            ).slice(0, 400)})`
-          }
-        ])
-        return
+        data = JSON.parse(raw)
+      } catch (e) {
+        throw new Error(`API返回不是JSON\nHTTP ${resp.status}\n(body="${raw || ''}")`)
       }
 
-      if (data?.error) {
-        setChat(prev => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: `【错误】${data.error}\n${
-              data?.debug ? JSON.stringify(data.debug, null, 2) : ''
-            }`
-          }
-        ])
-        return
+      if (!resp.ok || !data?.ok) {
+        const msg = data?.error || `HTTP ${resp.status}`
+        throw new Error(msg)
       }
 
-      setChat(prev => [
-        ...prev,
-        { role: 'assistant', content: data?.answer || '（无返回）' }
-      ])
+      const answer = data?.answer || '（无返回内容）'
+      setMsgs(prev => [...prev, { role: 'assistant', content: answer }])
     } catch (e) {
-      setChat(prev => [
+      setMsgs(prev => [
         ...prev,
-        { role: 'assistant', content: `【错误】${String(e)}` }
+        { role: 'assistant', content: `【错误】${String(e.message || e)}` }
       ])
     } finally {
       setLoading(false)
@@ -171,24 +130,23 @@ export default function MemoryChatWidget() {
   }
 
   function onKeyDown(e) {
-    const isSend =
-      (e.ctrlKey || e.metaKey) && (e.key === 'Enter' || e.keyCode === 13)
-    if (isSend) {
+    // Ctrl/Cmd + Enter 发送
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
       send()
     }
   }
 
-  const ui = (
+  return (
     <>
-      {/* 右下角按钮（不改你已有东西） */}
+      {/* 右下角按钮 */}
       <button
         onClick={() => setOpen(v => !v)}
         style={{
           position: 'fixed',
           right: 18,
           bottom: 18,
-          zIndex: 2147483647,
+          zIndex: Z,
           borderRadius: 999,
           padding: '10px 14px',
           background: 'rgba(0,0,0,0.65)',
@@ -200,39 +158,63 @@ export default function MemoryChatWidget() {
         {open ? '关闭' : '问问茶色'}
       </button>
 
-      {open && (
-        <div style={panelStyle}>
-          {/* 顶栏：拖动这里 */}
+      {!open ? null : (
+        <div
+          ref={containerRef}
+          style={{
+            position: 'fixed',
+            left: pos.x,
+            top: pos.y,
+            zIndex: Z,
+            width: boxW,
+            maxWidth: 'calc(100vw - 24px)',
+            height: boxH,
+            maxHeight: 'calc(100vh - 24px)',
+            background: '#fff',
+            borderRadius: 18,
+            boxShadow: '0 22px 70px rgba(0,0,0,0.28)',
+            border: '1px solid rgba(0,0,0,0.10)',
+            overflow: 'hidden'
+          }}
+        >
+          {/* 顶部栏（拖动区域） */}
           <div
-            onMouseDown={onMouseDownHeader}
+            onMouseDown={e => {
+              dragRef.current.dragging = true
+              dragRef.current.sx = e.clientX
+              dragRef.current.sy = e.clientY
+              dragRef.current.ox = pos.x
+              dragRef.current.oy = pos.y
+            }}
             style={{
               padding: '14px 16px',
               fontWeight: 900,
-              fontSize: 22,
+              fontSize: 26,
               borderBottom: '1px solid rgba(0,0,0,0.08)',
               cursor: 'move',
               userSelect: 'none',
               display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center'
+              alignItems: 'center',
+              gap: 10
             }}
           >
-            <span>我正在狠狠回答</span>
-            <span style={{ fontWeight: 500, fontSize: 14, opacity: 0.55 }}>
+            我正在狠狠回答
+            <span style={{ fontSize: 14, fontWeight: 600, opacity: 0.55 }}>
               （拖动这里移动；Ctrl/Cmd+Enter 发送）
             </span>
           </div>
 
-          {/* 对话区 */}
+          {/* 消息区 */}
           <div
+            ref={listRef}
             style={{
+              height: 'calc(100% - 14px - 52px - 140px)',
               padding: 16,
-              height: 350,
               overflow: 'auto',
               background: '#fff'
             }}
           >
-            {chat.map((m, idx) => {
+            {msgs.map((m, idx) => {
               const isUser = m.role === 'user'
               return (
                 <div
@@ -240,19 +222,20 @@ export default function MemoryChatWidget() {
                   style={{
                     display: 'flex',
                     justifyContent: isUser ? 'flex-end' : 'flex-start',
-                    marginBottom: 12
+                    marginBottom: 14
                   }}
                 >
                   <div
                     style={{
                       maxWidth: '78%',
-                      padding: '12px 14px',
+                      padding: '14px 16px',
                       borderRadius: 16,
-                      lineHeight: 1.6,
+                      lineHeight: 1.45,
+                      fontSize: 18,
                       whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                      background: isUser ? '#0f172a' : '#f3f4f6',
-                      color: isUser ? '#fff' : '#111'
+                      background: isUser ? '#0b1220' : '#f4f6f8',
+                      color: isUser ? '#fff' : '#111',
+                      border: isUser ? 'none' : '1px solid rgba(0,0,0,0.08)'
                     }}
                   >
                     {m.content}
@@ -263,13 +246,7 @@ export default function MemoryChatWidget() {
           </div>
 
           {/* 输入区 */}
-          <div
-            style={{
-              padding: 16,
-              borderTop: '1px solid rgba(0,0,0,0.08)',
-              background: '#fff'
-            }}
-          >
+          <div style={{ padding: 16, borderTop: '1px solid rgba(0,0,0,0.08)' }}>
             <textarea
               value={input}
               onChange={e => setInput(e.target.value)}
@@ -279,29 +256,28 @@ export default function MemoryChatWidget() {
                 width: '100%',
                 height: 90,
                 resize: 'none',
-                borderRadius: 12,
+                borderRadius: 14,
                 border: '1px solid rgba(0,0,0,0.12)',
                 padding: 12,
                 outline: 'none',
-                fontSize: 16
+                fontSize: 18
               }}
             />
-
             <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
               <button
                 onClick={send}
                 disabled={loading}
                 style={{
                   flex: 1,
-                  borderRadius: 12,
+                  borderRadius: 14,
                   padding: '12px 14px',
-                  background: '#0f172a',
+                  background: '#0b1220',
                   color: '#fff',
                   border: 'none',
                   cursor: loading ? 'not-allowed' : 'pointer',
-                  opacity: loading ? 0.7 : 1,
-                  fontWeight: 800,
-                  fontSize: 16
+                  opacity: loading ? 0.75 : 1,
+                  fontSize: 18,
+                  fontWeight: 800
                 }}
               >
                 {loading ? '思考中…' : '发送'}
@@ -310,19 +286,16 @@ export default function MemoryChatWidget() {
               <button
                 onClick={() => {
                   setInput('')
-                  setChat([
-                    {
-                      role: 'assistant',
-                      content: '你好，我是杨超哲，也可以叫我茶色。你想聊什么？'
-                    }
-                  ])
+                  setMsgs([{ role: 'assistant', content: '你好，我是杨超哲，也可以叫我茶色。你想聊什么？' }])
                 }}
                 style={{
-                  borderRadius: 12,
+                  width: 92,
+                  borderRadius: 14,
                   padding: '12px 14px',
                   background: '#fff',
                   border: '1px solid rgba(0,0,0,0.15)',
                   cursor: 'pointer',
+                  fontSize: 18,
                   fontWeight: 700
                 }}
               >
@@ -334,7 +307,4 @@ export default function MemoryChatWidget() {
       )}
     </>
   )
-
-  if (!mounted || !portalEl) return null
-  return createPortal(ui, portalEl)
 }
