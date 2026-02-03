@@ -4,10 +4,20 @@ import { checkStrIsNotionId, getLastPartOfUrl } from '@/lib/utils'
 import { idToUuid } from 'notion-utils'
 import BLOG from './blog.config'
 
+/**
+ * Clerk 身份验证中间件
+ */
 export const config = {
+  // 这里设置白名单，防止静态资源被拦截
   matcher: ['/((?!.*\\..*|_next|/sign-in|/auth).*)', '/', '/(api|trpc)(.*)']
 }
 
+// ✅ 放行这些 API（不走任何鉴权/重定向/UUID redirect）
+const isPublicApi = createRouteMatcher([
+  '/api/deepseek-chat(.*)'
+])
+
+// 限制登录访问的路由
 const isTenantRoute = createRouteMatcher([
   '/user/organization-selector(.*)',
   '/user/orgid/(.*)',
@@ -15,18 +25,23 @@ const isTenantRoute = createRouteMatcher([
   '/dashboard/(.*)'
 ])
 
+// 限制权限访问的路由
 const isTenantAdminRoute = createRouteMatcher([
   '/admin/(.*)/memberships',
   '/admin/(.*)/domain'
 ])
 
+/**
+ * 没有配置权限相关功能的返回
+ */
 // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
 const noAuthMiddleware = async (req: NextRequest, ev: any) => {
-  // ✅ 关键：放行 API，不让中间件碰它（否则你会得到 405 空 body）
-  if (req.nextUrl.pathname.startsWith('/api/deepseek-chat')) {
+  // ✅ 关键：API 直接放行
+  if (isPublicApi(req)) {
     return NextResponse.next()
   }
 
+  // 如果没有配置 Clerk 相关环境变量，返回一个默认响应或者继续处理请求
   if (BLOG['UUID_REDIRECT']) {
     let redirectJson: Record<string, string> = {}
     try {
@@ -53,23 +68,28 @@ const noAuthMiddleware = async (req: NextRequest, ev: any) => {
   return NextResponse.next()
 }
 
+/**
+ * 鉴权中间件
+ */
 const authMiddleware = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
   ? clerkMiddleware((auth, req) => {
-      // ✅ 关键：放行 API（Clerk 不要碰它）
-      if (req.nextUrl.pathname.startsWith('/api/deepseek-chat')) {
+      // ✅ 关键：API 直接放行
+      if (isPublicApi(req)) {
         return NextResponse.next()
       }
 
       const { userId } = auth()
-
+      // 处理 /dashboard 路由的登录保护
       if (isTenantRoute(req)) {
         if (!userId) {
+          // 用户未登录，重定向到 /sign-in
           const url = new URL('/sign-in', req.url)
-          url.searchParams.set('redirectTo', req.url)
+          url.searchParams.set('redirectTo', req.url) // 保存重定向目标
           return NextResponse.redirect(url)
         }
       }
 
+      // 处理管理员相关权限保护
       if (isTenantAdminRoute(req)) {
         auth().protect(has => {
           return (
@@ -79,6 +99,7 @@ const authMiddleware = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
         })
       }
 
+      // 默认继续处理请求
       return NextResponse.next()
     })
   : noAuthMiddleware
