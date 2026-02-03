@@ -2,7 +2,7 @@
 
 const path = require('path')
 
-const VERSION = 'deepseek-chat-api-2026-02-03-v2'
+const VERSION = 'deepseek-chat-api-2026-02-03-stable-v3'
 
 function safeJson(res, status, obj) {
   try {
@@ -13,7 +13,7 @@ function safeJson(res, status, obj) {
   }
 }
 
-function clampText(s, max = 16000) {
+function clampText(s, max = 20000) {
   if (!s) return ''
   const t = String(s)
   return t.length > max ? t.slice(0, max) + '\n…（已截断）' : t
@@ -40,19 +40,6 @@ function pickFn(mod, names = []) {
   return null
 }
 
-function pickAny(mod, keys = []) {
-  if (!mod) return null
-  for (const k of keys) {
-    if (mod[k] != null) return mod[k]
-  }
-  if (mod.default) {
-    for (const k of keys) {
-      if (mod.default[k] != null) return mod.default[k]
-    }
-  }
-  return null
-}
-
 async function safeCall(fn, argsList) {
   if (typeof fn !== 'function') return { ok: false, error: 'fn_not_function' }
   const attempts = Array.isArray(argsList) ? argsList : [[]]
@@ -68,143 +55,58 @@ async function safeCall(fn, argsList) {
   return { ok: false, error: lastErr ? String(lastErr) : 'call_failed' }
 }
 
+function normalizeNotionId(id) {
+  if (!id) return ''
+  const s = String(id).trim()
+  // 允许带横线或不带横线；NotionNext 通常都能处理
+  return s
+}
+
 /**
- * 读取 Notion 里的“记忆页”，支持：
- * - 直接 getPostBySlug(slug)
- * - 或者 getAllPosts() 找 slug，再 getNotionPost(pageId) 拿 blockMap
+ * ✅ 用 MEMORY_PAGE_ID 直接读 Notion 记忆页（最稳，不依赖 getAllPosts）
  */
-async function loadMemoryFromNotion() {
-  const slugCandidates = [
-    process.env.MEMORY_SLUG,
-    'memory',
-    'memroy',
-    'memory-core',
-    'memort'
-  ].filter(Boolean)
-
-  // 1) 先加载 “正文提取”函数（可选）
-  let getPageContentText = null
-  {
-    const r = tryRequire(path.join(process.cwd(), 'lib/notion/getPageContentText.js'))
-    if (r.ok) {
-      getPageContentText = pickFn(r.mod, ['getPageContentText'])
-    }
+async function loadMemoryFromNotionByPageId() {
+  const memoryPageId = normalizeNotionId(process.env.MEMORY_PAGE_ID)
+  if (!memoryPageId) {
+    return { ok: false, memory: '', used: false, reason: 'MEMORY_PAGE_ID_not_set' }
   }
 
-  // 2) 尝试直接拿 getPostBySlug（如果你项目里有）
-  let getPostBySlug = null
-  {
-    const r = tryRequire(path.join(process.cwd(), 'lib/notion/getNotionPost.js'))
-    if (r.ok) {
-      getPostBySlug = pickFn(r.mod, ['getPostBySlug'])
-    }
+  // 只用你项目里肯定存在的两个文件（你截图里都有）
+  const postMod = tryRequire(path.join(process.cwd(), 'lib/notion/getNotionPost.js'))
+  if (!postMod.ok) {
+    return { ok: false, memory: '', used: false, reason: 'getNotionPost_module_not_found' }
   }
-  if (!getPostBySlug) {
-    const r2 = tryRequire(path.join(process.cwd(), 'lib/notion/getNotionAPI.js'))
-    if (r2.ok) {
-      getPostBySlug = pickFn(r2.mod, ['getPostBySlug'])
-    }
+  const getNotionPost = pickFn(postMod.mod, ['getNotionPost'])
+  if (!getNotionPost) {
+    return { ok: false, memory: '', used: false, reason: 'getNotionPost_fn_not_found' }
   }
 
-  // ✅ 路线 A：有 getPostBySlug 就直接用
-  if (getPostBySlug) {
-    for (const slug of slugCandidates) {
-      const got = await safeCall(getPostBySlug, [[slug]])
-      if (got.ok && got.ret) {
-        const page = got.ret
-        let text = ''
-        if (getPageContentText && page.blockMap) {
-          const t = await safeCall(getPageContentText, [[page.blockMap]])
-          if (t.ok && t.ret) text = t.ret
-        }
-        if (!text) text = [page.title || '', page.summary || ''].filter(Boolean).join('\n')
-        text = clampText(text, 16000)
-        if (text) return { ok: true, memory: text, usedSlug: slug, reason: 'loaded_by_getPostBySlug' }
-      }
-    }
-    return { ok: false, memory: '', usedSlug: '', reason: 'getPostBySlug_found_but_page_not_found' }
+  const textMod = tryRequire(path.join(process.cwd(), 'lib/notion/getPageContentText.js'))
+  const getPageContentText = textMod.ok ? pickFn(textMod.mod, ['getPageContentText']) : null
+
+  const pageRet = await safeCall(getNotionPost, [[memoryPageId], [memoryPageId, null], [memoryPageId, '']])
+  if (!pageRet.ok || !pageRet.ret) {
+    return { ok: false, memory: '', used: false, reason: 'getNotionPost_call_failed' }
   }
 
-  // ✅ 路线 B：没有 getPostBySlug → 用 getAllPosts 找 slug → 再 getNotionPost(pageId)
-  let getAllPosts = null
-  {
-    const candidates = [
-      path.join(process.cwd(), 'lib/notion/getAllPosts.js'),
-      path.join(process.cwd(), 'lib/notion/getAllPost.js'),
-      path.join(process.cwd(), 'lib/notion/getAllPagedIds.js') // 有些分支会在这里再封装
-    ]
-    for (const p of candidates) {
-      const r = tryRequire(p)
-      if (!r.ok) continue
-      getAllPosts = pickFn(r.mod, ['getAllPosts'])
-      if (getAllPosts) break
-    }
+  const page = pageRet.ret
+
+  let memoryText = ''
+  if (getPageContentText && page.blockMap) {
+    const t = await safeCall(getPageContentText, [[page.blockMap]])
+    if (t.ok && t.ret) memoryText = String(t.ret)
   }
 
-  let getNotionPost = null
-  {
-    const r = tryRequire(path.join(process.cwd(), 'lib/notion/getNotionPost.js'))
-    if (r.ok) {
-      getNotionPost = pickFn(r.mod, ['getNotionPost'])
-    }
+  if (!memoryText) {
+    memoryText = [page.title || '', page.summary || ''].filter(Boolean).join('\n')
   }
 
-  if (!getAllPosts || !getNotionPost) {
-    return {
-      ok: false,
-      memory: '',
-      usedSlug: '',
-      reason: !getAllPosts ? 'getAllPosts_not_found' : 'getNotionPost_not_found'
-    }
+  memoryText = clampText(memoryText, 20000).trim()
+  if (!memoryText) {
+    return { ok: false, memory: '', used: false, reason: 'memory_text_empty' }
   }
 
-  // 拉全站 posts
-  const postsRet = await safeCall(getAllPosts, [[], [null], [{}]])
-  if (!postsRet.ok || !Array.isArray(postsRet.ret)) {
-    return { ok: false, memory: '', usedSlug: '', reason: 'getAllPosts_call_failed' }
-  }
-
-  const posts = postsRet.ret
-
-  // 用 slugCandidates 依次匹配
-  for (const slug of slugCandidates) {
-    const post =
-      posts.find(p => p?.slug === slug) ||
-      posts.find(p => p?.slug?.endsWith('/' + slug)) ||
-      posts.find(p => p?.path === slug) ||
-      null
-
-    if (!post) continue
-
-    const pageId =
-      post?.id ||
-      post?.pageId ||
-      post?.page_id ||
-      post?.notionId ||
-      post?.notion_id ||
-      null
-
-    if (!pageId) continue
-
-    const pageRet = await safeCall(getNotionPost, [[pageId], [pageId, null], [pageId, '']])
-    if (!pageRet.ok || !pageRet.ret) continue
-
-    const page = pageRet.ret
-
-    let text = ''
-    if (getPageContentText && page.blockMap) {
-      const t = await safeCall(getPageContentText, [[page.blockMap]])
-      if (t.ok && t.ret) text = t.ret
-    }
-    if (!text) text = [page.title || '', page.summary || ''].filter(Boolean).join('\n')
-
-    text = clampText(text, 16000)
-    if (text) {
-      return { ok: true, memory: text, usedSlug: slug, reason: 'loaded_by_getAllPosts_then_getNotionPost' }
-    }
-  }
-
-  return { ok: false, memory: '', usedSlug: '', reason: 'slug_not_found_in_posts' }
+  return { ok: true, memory: memoryText, used: true, reason: 'loaded_by_MEMORY_PAGE_ID' }
 }
 
 async function callDeepSeek({ apiKey, system, memory, history, message }) {
@@ -212,15 +114,16 @@ async function callDeepSeek({ apiKey, system, memory, history, message }) {
 
   messages.push({ role: 'system', content: system })
 
-  if (memory) {
-    messages.push({
-      role: 'system',
-      content:
-        '【记忆（来自Notion，视为事实来源）】\n' +
-        memory +
-        '\n\n【硬规则】只允许基于“记忆”回答事实；记忆没有就说“不确定”，并问1-2个关键追问；禁止编造。'
-    })
-  }
+  messages.push({
+    role: 'system',
+    content:
+      '【记忆（来自Notion，视为事实来源）】\n' +
+      memory +
+      '\n\n【规则】\n' +
+      '1) 只允许基于“记忆”回答事实。\n' +
+      '2) 记忆里没有就说“不确定”，并追问1-2个关键问题。\n' +
+      '3) 禁止编造任何经历、年份、细节。\n'
+  })
 
   if (Array.isArray(history) && history.length) {
     for (const m of history) {
@@ -241,11 +144,12 @@ async function callDeepSeek({ apiKey, system, memory, history, message }) {
     body: JSON.stringify({
       model: 'deepseek-chat',
       messages,
-      temperature: 0.35
+      temperature: 0.25
     })
   })
 
   const text = await resp.text()
+
   let data = null
   try {
     data = JSON.parse(text)
@@ -270,13 +174,13 @@ export default async function handler(req, res) {
   }
 
   if (req.method !== 'POST') {
-    return safeJson(res, 405, { ok: false, error: 'Method Not Allowed' })
+    return safeJson(res, 405, { ok: false, error: 'Method Not Allowed', version: VERSION })
   }
 
   try {
     const apiKey = process.env.DEEPSEEK_API_KEY
     if (!apiKey) {
-      return safeJson(res, 500, { ok: false, error: 'Missing DEEPSEEK_API_KEY' })
+      return safeJson(res, 500, { ok: false, error: 'Missing DEEPSEEK_API_KEY', version: VERSION })
     }
 
     const body = req.body || {}
@@ -284,30 +188,31 @@ export default async function handler(req, res) {
     const history = body.history || []
 
     if (!message || !String(message).trim()) {
-      return safeJson(res, 400, { ok: false, error: 'Missing message' })
+      return safeJson(res, 400, { ok: false, error: 'Missing message', version: VERSION })
     }
 
-    const mem = await loadMemoryFromNotion()
+    const mem = await loadMemoryFromNotionByPageId()
 
-    // 🔥 关键：记忆没加载到 -> 直接返回错误，不让模型瞎编
+    // ✅ 记忆没加载到：直接报错，不让模型瞎编
     if (!mem.ok) {
       return safeJson(res, 500, {
         ok: false,
         error: 'MEMORY_NOT_LOADED',
         memory_used: false,
-        memory_slug: '',
         memory_reason: mem.reason,
+        memory_page_id_set: Boolean(process.env.MEMORY_PAGE_ID),
         version: VERSION
       })
     }
 
     const system = `
 你就是杨超哲（Tawney / 茶色），在和别人正常聊天。
-风格要求：
-- 直接、清晰、有判断，但不无礼、不阴阳怪气。
-- 像人一样对话：自然、简洁，不说“我是AI助手”。
+风格：
+- 直接、清晰、有判断，但不无礼。
+- 像人一样说话，不要说“我是AI/助手”。
 - 对方问“你是谁”：回答“你好，我是杨超哲，也可以叫我茶色。”
-- 必须遵守：只基于记忆回答事实；记忆没有就说不确定并追问；禁止编造。
+硬规则：
+- 只允许基于记忆回答事实；记忆没有就说不确定并追问；禁止编造。
 `.trim()
 
     const result = await callDeepSeek({
@@ -325,7 +230,6 @@ export default async function handler(req, res) {
         status: result.status,
         raw: clampText(result.raw, 2000),
         memory_used: true,
-        memory_slug: mem.usedSlug,
         memory_reason: mem.reason,
         version: VERSION
       })
@@ -335,7 +239,6 @@ export default async function handler(req, res) {
       ok: true,
       answer: result.answer,
       memory_used: true,
-      memory_slug: mem.usedSlug,
       memory_reason: mem.reason,
       version: VERSION
     })
