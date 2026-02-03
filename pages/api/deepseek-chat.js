@@ -1,65 +1,171 @@
-export default async function handler(req, res) {
-  // 永远返回 JSON（避免你前端 JSON.parse 炸）
-  res.setHeader('Content-Type', 'application/json; charset=utf-8')
+/* pages/api/deepseek-chat.js */
+/* eslint-disable */
+const path = require('path')
 
-  // 允许 GET 用来健康检查（避免 405 空 body）
+// ✅ 用绝对路径 require，避免 @/lib/notion 或 ../../lib/notion 抽风
+const notionPostModule = require(path.join(process.cwd(), 'lib/notion/getNotionPost.js'))
+const notionTextModule = require(path.join(process.cwd(), 'lib/notion/getPageContentText.js'))
+
+const getPostBySlug =
+  notionPostModule.getPostBySlug ||
+  (notionPostModule.default && notionPostModule.default.getPostBySlug) ||
+  notionPostModule.default
+
+const getPageContentText =
+  notionTextModule.getPageContentText ||
+  notionTextModule.default ||
+  notionTextModule
+
+const VERSION = 'deepseek-chat-api-2026-02-03-v2'
+
+// 简单截断，避免 token 爆炸
+function clampText(s, max = 14000) {
+  if (!s) return ''
+  const t = String(s)
+  return t.length > max ? t.slice(0, max) + '\n…(已截断)…' : t
+}
+
+// 记忆缓存（减少每次都打 Notion）
+let _memoryCache = { ts: 0, slug: '', text: '' }
+const MEMORY_CACHE_MS = 60 * 1000 // 1分钟
+
+async function loadMemoryFromNotion() {
+  // ✅ 候选 slug：你 Notion 里可能叫 memory / memroy / memory-core 等
+  const candidates = [
+    process.env.MEMORY_SLUG, // 你愿意的话可在 Vercel env 里指定
+    'memory',
+    'memroy',
+    'memory-core',
+    'memort'
+  ].filter(Boolean)
+
+  for (const slug of candidates) {
+    try {
+      const page = await getPostBySlug(slug)
+      if (!page) continue
+
+      // page.blockMap 才能拿到正文
+      const blockMap = page.blockMap || page?.post?.blockMap
+      let bodyText = ''
+
+      if (blockMap && getPageContentText) {
+        try {
+          bodyText = await getPageContentText(blockMap)
+        } catch (e) {
+          bodyText = ''
+        }
+      }
+
+      // 兜底：title + summary
+      const title = page?.title || page?.post?.title || ''
+      const summary = page?.summary || page?.post?.summary || ''
+
+      const merged = [
+        title ? `# ${title}` : '',
+        bodyText ? String(bodyText) : '',
+        !bodyText && summary ? String(summary) : ''
+      ]
+        .filter(Boolean)
+        .join('\n')
+        .trim()
+
+      if (merged) {
+        return { slug, text: clampText(merged) }
+      }
+    } catch (e) {
+      // 下一条候选 slug
+    }
+  }
+
+  return { slug: '', text: '' }
+}
+
+async function getMemoryCached() {
+  const now = Date.now()
+  if (_memoryCache.text && now - _memoryCache.ts < MEMORY_CACHE_MS) {
+    return _memoryCache
+  }
+  const loaded = await loadMemoryFromNotion()
+  _memoryCache = { ts: now, slug: loaded.slug, text: loaded.text }
+  return _memoryCache
+}
+
+function setJsonHeaders(res) {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8')
+  // 同域一般不需要，但加了也不影响；能避免某些奇怪 405/空 body 的场景
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+}
+
+module.exports = async function handler(req, res) {
+  setJsonHeaders(res)
+
+  // ✅ 预检
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end()
+  }
+
+  // ✅ 你用来测试的 ping
   if (req.method === 'GET') {
-    return res.status(200).json({ ok: true })
+    const q = req.query || {}
+    if (q.message === 'ping') {
+      return res.status(200).json({ ok: true, version: VERSION })
+    }
+    return res.status(200).json({ ok: true, version: VERSION })
   }
 
   if (req.method !== 'POST') {
-    return res.status(200).json({
-      ok: false,
-      error: `Method ${req.method} Not Allowed (use POST)`
-    })
+    return res.status(405).json({ ok: false, error: 'Method Not Allowed' })
   }
 
   try {
     const apiKey = process.env.DEEPSEEK_API_KEY
     if (!apiKey) {
-      return res.status(200).json({ ok: false, error: 'Missing DEEPSEEK_API_KEY' })
+      return res.status(500).json({ ok: false, error: 'Missing DEEPSEEK_API_KEY' })
     }
 
     const body = req.body || {}
-    const memorySlugs = Array.isArray(body.memorySlugs) ? body.memorySlugs : ['memory', 'memory-core', 'memroy']
-    const incoming = Array.isArray(body.messages) ? body.messages : []
-    const lastUser = (body.message || '').trim()
+    const message = (body.message || '').trim()
+    const history = Array.isArray(body.history) ? body.history : []
 
-    // 兼容两种入参：messages（推荐）或 message（单轮）
-    let chat = []
-    if (incoming.length > 0) {
-      chat = incoming
-        .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-        .slice(-24) // 控制长度
-    } else if (lastUser) {
-      chat = [{ role: 'user', content: lastUser }]
+    if (!message) {
+      return res.status(400).json({ ok: false, error: 'Missing message' })
     }
 
-    if (chat.length === 0) {
-      return res.status(200).json({ ok: false, error: 'Missing message/messages' })
-    }
+    // ✅ 从 Notion 拉“记忆”
+    const mem = await getMemoryCached()
+    const memoryText = mem?.text || ''
 
-    // 1) 从你的站点抓“记忆页”的 HTML，再粗暴转成纯文本
-    const origin =
-      (req.headers['x-forwarded-proto'] ? `${req.headers['x-forwarded-proto']}://` : 'https://') +
-      (req.headers['x-forwarded-host'] || req.headers.host)
-
-    const memoryText = await fetchMemoryFromSite(origin, memorySlugs)
-
-    // 2) System Prompt：INTJ：直接但礼貌；不许编造；以记忆为准
+    // ✅ 你要的“我是我自己” + “直但有礼貌” + “不许瞎编”
     const system = `
-你是“杨超哲（Tawney / 茶色）”本人在互联网上的数字化分身。
-风格：INTJ，直接、高效、有判断，但保持基本礼貌，不阴阳怪气、不攻击、不装腔。
-规则：
-1) 只基于【记忆】与对话上下文回答；没有依据就明确说“我不确定/我不知道”，并提出你需要的关键补充信息。
-2) 严禁编造任何“个人经历/童年回忆/具体事件”。除非【记忆】明确写了。
-3) 回答结构：先结论，再理由；能短就短，讲重点和逻辑。
+你是“杨超哲”（Tawney / 茶色）本人在网上的数字分身，用第一人称“我”回答。
+
+【风格】
+- 直接、效率优先，但保持礼貌（INTJ：不讨好、不绕弯，不粗暴、不挑衅）。
+- 先给结论，再给理由；不写废话。
+- 不要自说自话、不加戏、不编造经历。
+
+【记忆规则】
+- 你会收到一段“记忆（来自 Notion）”。只能以这段记忆为准。
+- 记忆里没有的事：明确说“我记忆里没写这条/我不确定”，然后问 1-2 个关键问题补齐。
+- 绝对禁止凭空捏造具体年份、地点、事件、经历。
+
+【对外】
+- 你代表“我”回答别人问题，保持专业、简洁、有判断。
 `.trim()
+
+    // 只保留最近 12 条上下文（避免爆 token）
+    const trimmedHistory = history
+      .filter(x => x && typeof x === 'object' && (x.role === 'user' || x.role === 'assistant') && typeof x.content === 'string')
+      .slice(-12)
+      .map(x => ({ role: x.role, content: String(x.content).slice(0, 3000) }))
 
     const messages = [
       { role: 'system', content: system },
-      ...(memoryText ? [{ role: 'system', content: `【记忆】\n${memoryText}` }] : []),
-      ...chat
+      ...(memoryText ? [{ role: 'system', content: `【记忆（来自Notion，必须遵守）】\n${memoryText}` }] : []),
+      ...trimmedHistory,
+      { role: 'user', content: message }
     ]
 
     const resp = await fetch('https://api.deepseek.com/chat/completions', {
@@ -70,80 +176,38 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'deepseek-chat',
-        temperature: 0.2,
-        messages
+        messages,
+        temperature: 0.3
       })
     })
 
-    const text = await resp.text()
+    const raw = await resp.text()
 
-    // DeepSeek 偶尔返回非 JSON：这里也保证我们回 JSON
+    // DeepSeek 有时会返回非 JSON（或空），这里保证我们永远返回 JSON 给前端
     let data = null
     try {
-      data = text ? JSON.parse(text) : null
+      data = JSON.parse(raw)
     } catch (e) {
       return res.status(200).json({
         ok: false,
         error: 'DeepSeek returned non-JSON',
         httpStatus: resp.status,
-        raw: text || ''
+        raw: raw || '(empty)'
       })
     }
 
-    const answer =
-      data?.choices?.[0]?.message?.content ||
-      data?.choices?.[0]?.text ||
-      '（无返回内容）'
+    const answer = data?.choices?.[0]?.message?.content || '（无返回内容）'
 
     return res.status(200).json({
       ok: true,
-      answer
+      answer,
+      meta: {
+        version: VERSION,
+        memorySlug: mem.slug || '',
+        memoryChars: (memoryText || '').length
+      }
     })
   } catch (e) {
     return res.status(200).json({ ok: false, error: String(e) })
   }
-}
-
-// 抓取你站点的 /memory 或 /memory-core 页面，然后转成文本
-async function fetchMemoryFromSite(origin, slugs) {
-  for (const slug of slugs) {
-    try {
-      const url = `${origin.replace(/\/$/, '')}/${slug.replace(/^\//, '')}`
-      const r = await fetch(url, {
-        method: 'GET',
-        headers: { 'User-Agent': 'memory-bot' }
-      })
-      if (!r.ok) continue
-      const html = await r.text()
-      const text = htmlToText(html)
-
-      // 有内容才算成功
-      const cleaned = (text || '').trim()
-      if (cleaned.length > 50) {
-        // 控制 token：最多 8k 字左右（你后面要更大再说）
-        return cleaned.slice(0, 8000)
-      }
-    } catch (e) {}
-  }
-  return ''
-}
-
-function htmlToText(html) {
-  if (!html) return ''
-  // 去掉 script/style
-  let s = html.replace(/<script[\s\S]*?<\/script>/gi, '')
-  s = s.replace(/<style[\s\S]*?<\/style>/gi, '')
-  // 把 <br> / </p> / </div> 变成换行
-  s = s.replace(/<br\s*\/?>/gi, '\n')
-  s = s.replace(/<\/p>/gi, '\n')
-  s = s.replace(/<\/div>/gi, '\n')
-  // 去标签
-  s = s.replace(/<[^>]+>/g, '')
-  // 解一点常见实体
-  s = s.replace(/&nbsp;/g, ' ')
-  s = s.replace(/&amp;/g, '&')
-  s = s.replace(/&lt;/g, '<')
-  s = s.replace(/&gt;/g, '>')
-  s = s.replace(/\n{3,}/g, '\n\n')
-  return s
 }
