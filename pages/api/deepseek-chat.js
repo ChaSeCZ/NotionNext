@@ -1,19 +1,18 @@
-import getPageContentText from '../../lib/notion/getPageContentText'
-import getNotionPost from '../../lib/notion/getNotionPost'
-
-let MEMORY_CACHE = { text: '', ts: 0 }
-
-async function getPostBySlug(slug) {
-  // NotionNext 原函数一般是 getNotionPost(slug) 这种形式；做个兼容封装
-  const post = await getNotionPost({ slug })
-  return post
-}
-
 export default async function handler(req, res) {
+  // ✅ 永远返回 JSON + 允许跨域/预检（哪怕你未来从别的域名请求）
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 
+  // ✅ 预检请求直接放行（很多“405”其实是 OPTIONS 被你当成非 POST 干掉了）
+  if (req.method === 'OPTIONS') {
+    return res.status(200).json({ ok: true })
+  }
+
+  // ✅ 只允许 POST
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' })
+    return res.status(405).json({ error: 'Method Not Allowed', method: req.method })
   }
 
   try {
@@ -23,67 +22,33 @@ export default async function handler(req, res) {
     }
 
     const body = req.body || {}
-    const incomingMessages = Array.isArray(body.messages) ? body.messages : null
-    const message = typeof body.message === 'string' ? body.message : ''
 
-    let convo = []
-    if (incomingMessages && incomingMessages.length) {
-      convo = incomingMessages
-        .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-        .slice(-20)
-    } else if (message.trim()) {
-      convo = [{ role: 'user', content: message.trim() }]
-    } else {
+    // 支持两种入参：
+    // 1) { message: "xxx", memory: "..." }
+    // 2) { messages: [{role,content}...], memory: "..." }
+    const message = typeof body.message === 'string' ? body.message : ''
+    const messages = Array.isArray(body.messages) ? body.messages : []
+    const memory = typeof body.memory === 'string' ? body.memory : ''
+
+    if (!message && messages.length === 0) {
       return res.status(400).json({ error: 'Missing message/messages' })
     }
 
-    // 读取 Notion 记忆 memory-core（缓存 60s）
-    const now = Date.now()
-    let memoryText = ''
-    if (MEMORY_CACHE.text && now - MEMORY_CACHE.ts < 60_000) {
-      memoryText = MEMORY_CACHE.text
-    } else {
-      try {
-        const memoryPage = await getPostBySlug('memory-core')
-        if (memoryPage?.blockMap) {
-          let pageText = ''
-          try {
-            pageText = await getPageContentText(memoryPage.blockMap)
-          } catch (e) {
-            console.error('[memory-core] getPageContentText failed:', e)
-          }
-
-          memoryText = [
-            memoryPage?.title ? `# ${memoryPage.title}` : '',
-            pageText || '',
-            memoryPage?.summary ? `\n（摘要）\n${memoryPage.summary}` : ''
-          ]
-            .filter(Boolean)
-            .join('\n')
-            .trim()
-
-          MEMORY_CACHE = { text: memoryText, ts: now }
-        }
-      } catch (e) {
-        console.error('[memory-core] load failed:', e)
-      }
-    }
-
+    // ✅ 你要的“他就是我”：系统设定写死在 system 里
     const system = `
-你不是客服、不是助手、不是AI旁白。
-你就是「杨超哲（Tawney / 茶色）」本人，以第一人称“我”对外回答。
-
-回答规则（必须执行）：
-1) 先给结论，再给理由；不废话。
-2) 信息不足：直接问关键问题，不瞎猜。
-3) 语气直接、有判断、像本人说话，不客套、不迎合。
-4) 如果和记忆冲突：以记忆为准，并指出冲突。
+你不是“客服/助手”，你就是“杨超哲（Tawney / 茶色）本人”的数字化人格。
+必须像本人说话与判断：直接、讨厌废话、先结论后理由、讲重点与逻辑。
+如果信息不足，先问关键问题，不要乱猜。
+你要把外界提问当作在问“杨超哲本人”。
 `.trim()
 
-    const messages = [
+    // ✅ 拼消息：system + memory(系统记忆) + 对话历史 + 当前问题
+    // 如果前端传了 messages，就直接用 messages 作为历史上下文；
+    // 否则用 message 当作当前一轮
+    const finalMessages = [
       { role: 'system', content: system },
-      ...(memoryText ? [{ role: 'system', content: `【我的记忆】\n${memoryText}` }] : []),
-      ...convo
+      ...(memory ? [{ role: 'system', content: `【记忆】\n${memory}` }] : []),
+      ...(messages.length ? messages : [{ role: 'user', content: message }])
     ]
 
     const resp = await fetch('https://api.deepseek.com/chat/completions', {
@@ -94,38 +59,36 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'deepseek-chat',
-        messages,
-        temperature: 0.6
+        messages: finalMessages,
+        temperature: 0.7
       })
     })
 
     const raw = await resp.text()
 
+    // ✅ DeepSeek 失败时也要给前端 JSON
+    if (!resp.ok) {
+      return res.status(resp.status).json({
+        error: 'DeepSeek API error',
+        status: resp.status,
+        raw
+      })
+    }
+
+    // ✅ DeepSeek 正常情况：解析 JSON
     let data
     try {
       data = JSON.parse(raw)
     } catch (e) {
-      console.error('[deepseek] non-json:', raw)
       return res.status(500).json({
         error: 'DeepSeek returned non-JSON',
-        httpStatus: resp.status,
-        raw: (raw || '').slice(0, 3000)
+        raw
       })
     }
 
-    if (!resp.ok) {
-      console.error('[deepseek] http error:', resp.status, data)
-      return res.status(resp.status).json({
-        error: data?.error?.message || 'DeepSeek request failed',
-        httpStatus: resp.status,
-        raw: (raw || '').slice(0, 3000)
-      })
-    }
-
-    const answer = data?.choices?.[0]?.message?.content || '（无返回内容）'
+    const answer = data?.choices?.[0]?.message?.content || ''
     return res.status(200).json({ answer })
   } catch (e) {
-    console.error('[api] crash:', e)
     return res.status(500).json({ error: String(e) })
   }
 }
