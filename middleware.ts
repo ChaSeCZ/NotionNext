@@ -5,6 +5,15 @@ import { idToUuid } from 'notion-utils'
 import BLOG from './blog.config'
 
 /**
+ * ✅ 关键：这些 API 必须无条件放行（否则会被 Clerk/中间件影响，出现 405 或返回 HTML）
+ * 你现在至少需要 deepseek-chat
+ * 如果你还有别的自建 API，也可以按这个格式继续加
+ */
+const isPublicApiRoute = createRouteMatcher([
+  '/api/deepseek-chat(.*)'
+])
+
+/**
  * Clerk 身份验证中间件
  */
 export const config = {
@@ -28,12 +37,14 @@ const isTenantAdminRoute = createRouteMatcher([
 
 /**
  * 没有配置权限相关功能的返回
- * @param req
- * @param ev
- * @returns
  */
 // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
 const noAuthMiddleware = async (req: NextRequest, ev: any) => {
+  // ✅ 关键：API 白名单直接放行
+  if (isPublicApiRoute(req)) {
+    return NextResponse.next()
+  }
+
   // 如果没有配置 Clerk 相关环境变量，返回一个默认响应或者继续处理请求
   if (BLOG['UUID_REDIRECT']) {
     let redirectJson: Record<string, string> = {}
@@ -60,12 +71,19 @@ const noAuthMiddleware = async (req: NextRequest, ev: any) => {
   }
   return NextResponse.next()
 }
+
 /**
  * 鉴权中间件
  */
 const authMiddleware = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
   ? clerkMiddleware((auth, req) => {
+      // ✅ 关键：API 白名单直接放行（避免 405 / HTML / 空 body）
+      if (isPublicApiRoute(req)) {
+        return NextResponse.next()
+      }
+
       const { userId } = auth()
+
       // 处理 /dashboard 路由的登录保护
       if (isTenantRoute(req)) {
         if (!userId) {
